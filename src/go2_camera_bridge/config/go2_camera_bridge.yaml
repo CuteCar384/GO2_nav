@@ -1,0 +1,11 @@
+go2_front_camera_bridge:
+  ros__parameters:
+    sdk_path: /home/huang/unitree_sdk2_python
+    network_interface: ""
+    frame_id: go2_front_camera
+    fps: 15.0
+    timeout_sec: 3.0
+    image_topic: /go2/front_camera/image_raw
+    compressed_topic: /go2/front_camera/image_raw/compressed
+    publish_raw: true
+    publish_compressed: true

@@ -1,0 +1,75 @@
+go2_simple_goal_controller:
+  ros__parameters:
+    control_rate_hz: 20.0
+    stale_odometry_timeout: 0.5
+    position_tolerance: 0.25
+    yaw_tolerance: 0.18
+    rotate_in_place_threshold: 0.35
+    k_forward: 0.8
+    k_lateral: 0.0
+    k_heading: 1.4
+    k_final_yaw: 1.6
+    min_linear_speed: 0.30
+    max_linear_x: 0.40
+    max_linear_y: 0.25
+    max_linear_speed: 0.45
+    min_angular_speed: 0.30
+    max_angular_z: 0.80
+    allow_reverse: false
+    allow_lateral_motion: false
+
+go2_dynamic_obstacle_filter:
+  ros__parameters:
+    control_rate_hz: 20.0
+    cmd_timeout: 0.4
+    sensor_timeout: 0.4
+    max_sensor_distance: 5.0
+    fail_safe_stop_on_stale: true
+    use_range_info: true
+    use_cloud: true
+    front_stop_distance: 0.40
+    front_avoid_distance: 0.75
+    front_slow_distance: 1.20
+    side_stop_distance: 0.18
+    side_slow_distance: 0.32
+    minimum_slowdown_ratio: 0.20
+    avoid_forward_speed: 0.10
+    avoid_lateral_speed: 0.18
+    avoid_turn_speed: 0.35
+    side_repulsion_distance: 0.45
+    lateral_repulsion_gain: 1.0
+    yaw_repulsion_gain: 1.0
+    max_linear_x: 0.40
+    max_linear_y: 0.25
+    max_angular_z: 0.80
+    linear_deadband: 0.02
+    angular_deadband: 0.02
+    cloud_min_rel_z: -0.10
+    cloud_max_rel_z: 0.65
+    cloud_forward_limit: 2.50
+    cloud_rear_limit: -0.20
+    cloud_side_limit: 1.20
+    front_half_width: 0.35
+    side_forward_min: -0.10
+    side_forward_max: 0.80
+    side_inner_offset: 0.05
+    side_outer_offset: 0.65
+    clearance_release_alpha: 0.18
+    avoid_direction_lock_time: 0.8
+    side_selection_margin: 0.08
+
+unitree_sport_bridge:
+  ros__parameters:
+    control_rate_hz: 20.0
+    command_timeout: 0.3
+    linear_deadband: 0.02
+    angular_deadband: 0.02
+    min_linear_speed: 0.30
+    max_linear_x: 0.40
+    max_linear_y: 0.25
+    min_angular_speed: 0.30
+    max_angular_z: 0.80
+
+go2_saved_map_publisher:
+  ros__parameters:
+    publish_period: 1.0
