@@ -15,7 +15,7 @@
 | --- | --- | --- | --- | --- |
 | 建图 | `go2_mapping_minimal` | `/utlidar/cloud_deskewed` `/utlidar/robot_odom` | `/go2_built_map` `/go2_robot_path` `output/go2_built_map.pcd` | 在线累积去畸变点云，退出时保存二进制 PCD |
 | 目标点导航 | `go2_navigation` | `/utlidar/robot_odom` `/goal_pose` | `/cmd_vel_nav` `/cmd_vel` `/api/sport/request` | 基于里程计的轻量闭环控制，不是完整 Nav2 |
-| 动态避障 | `go2_navigation` | `/cmd_vel_nav` `/utlidar/range_info` `/utlidar/cloud_deskewed` `/utlidar/robot_odom` | `/cmd_vel` `/go2_navigation/obstacle_filter_status` `/go2_navigation/fused_range_info` | 在导航速度和运动执行之间做急停、减速、绕行动作偏置 |
+| 动态避障/地形过滤 | `go2_navigation` | `/cmd_vel_nav` `/utlidar/range_info` `/utlidar/cloud_deskewed` `/utlidar/height_map_array` `/utlidar/robot_odom` | `/cmd_vel` `/go2_navigation/obstacle_filter_status` `/go2_navigation/fused_range_info` | 在导航速度和运动执行之间做动态障碍急停、减速、绕行动作偏置，以及基于高度图的坡度/台阶/落差过滤 |
 | 图像发布 | `go2_camera_bridge` | Go2 前置相机 JPEG 流 | `/go2/front_camera/image_raw` `/go2/front_camera/image_raw/compressed` | 使用 `unitree_sdk2_python` 拉流，再桥接成标准 ROS 2 图像话题 |
 
 ## 目录结构
@@ -60,6 +60,7 @@
 建议先确认现场能看到这些关键话题：
 
 - `/utlidar/cloud_deskewed`
+- `/utlidar/height_map_array`
 - `/utlidar/robot_odom`
 - `/utlidar/range_info`
 - `/api/sport/request`
@@ -234,6 +235,7 @@ ros2 launch go2_navigation click_goal_nav.launch.py \
 
 - `/utlidar/range_info`
 - `/utlidar/cloud_deskewed`
+- `/utlidar/height_map_array`
 - `/utlidar/robot_odom`
 
 默认输出：
@@ -247,6 +249,9 @@ ros2 launch go2_navigation click_goal_nav.launch.py \
 - 前向距离过近时急停
 - 接近障碍时按距离比例减速
 - 根据左右净空差异选择偏置方向
+- 根据高度图估计前方台阶、落差、坡度
+- 超过地形硬阈值时触发 `terrain_stop`
+- 左右地形评分不一致时优先偏向更可通行的一侧
 - 传感器或里程计超时后触发 fail-safe 停车
 
 主要参数在：
@@ -258,6 +263,33 @@ src/go2_navigation/config/go2_navigation.yaml
 比较常用的一组阈值：
 
 - `front_stop_distance: 0.40`
+- `terrain_hard_step_limit: 0.16`
+- `terrain_soft_step_limit: 0.10`
+- `terrain_hard_drop_limit: 0.16`
+- `terrain_soft_drop_limit: 0.10`
+- `terrain_hard_slope_deg: 40.0`
+- `terrain_soft_slope_deg: 30.0`
+
+高度图地形过滤当前实现说明：
+
+- 默认订阅 `/utlidar/height_map_array`，消息类型是 `unitree_go/msg/HeightMap`
+- 使用机器人脚下附近窗口作为基准高度
+- 在机器人前方窗口统计最大上台阶、最大下落、局部坡度
+- 当上台阶、下落或坡度超过硬阈值时停车
+- 当超过软阈值但未超硬阈值时减速
+- 对左右前方窗口分别打分，选择更平整、更安全的一侧施加横移和转向偏置
+
+两个导航 launch 都支持覆盖高度图话题：
+
+```bash
+ros2 launch go2_navigation simple_goal_nav.launch.py \
+  height_map_topic:=/utlidar/height_map_array
+```
+
+```bash
+ros2 launch go2_navigation click_goal_nav.launch.py \
+  height_map_topic:=/utlidar/height_map_array
+```
 - `front_avoid_distance: 0.75`
 - `front_slow_distance: 1.20`
 - `side_stop_distance: 0.18`

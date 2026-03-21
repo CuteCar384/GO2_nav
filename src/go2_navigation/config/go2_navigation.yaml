@@ -27,6 +27,7 @@ go2_dynamic_obstacle_filter:
     fail_safe_stop_on_stale: true
     use_range_info: true
     use_cloud: true
+    use_height_map: true
     front_stop_distance: 0.40
     front_avoid_distance: 0.75
     front_slow_distance: 1.20
@@ -57,6 +58,24 @@ go2_dynamic_obstacle_filter:
     clearance_release_alpha: 0.18
     avoid_direction_lock_time: 0.8
     side_selection_margin: 0.08
+    terrain_hard_step_limit: 0.16
+    terrain_soft_step_limit: 0.10
+    terrain_hard_drop_limit: 0.16
+    terrain_soft_drop_limit: 0.10
+    terrain_hard_slope_deg: 40.0
+    terrain_soft_slope_deg: 30.0
+    terrain_forward_near: 0.30
+    terrain_forward_far: 1.00
+    terrain_half_width: 0.25
+    terrain_side_forward_far: 0.80
+    terrain_side_inner_offset: 0.20
+    terrain_side_outer_offset: 0.50
+    terrain_base_near: -0.20
+    terrain_base_far: 0.20
+    terrain_base_half_width: 0.20
+    terrain_bias_gain: 1.0
+    terrain_bias_margin: 0.12
+    terrain_score_clip: 3.0
 
 unitree_sport_bridge:
   ros__parameters:

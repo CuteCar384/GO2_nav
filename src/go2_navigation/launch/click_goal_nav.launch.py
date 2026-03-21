@@ -44,6 +44,11 @@ def generate_launch_description():
         default_value="/cmd_vel",
         description="Velocity topic shared between the goal controller and the Unitree bridge.",
     )
+    height_map_topic = DeclareLaunchArgument(
+        "height_map_topic",
+        default_value="/utlidar/height_map_array",
+        description="Height-map topic used for terrain filtering.",
+    )
     sport_request_topic = DeclareLaunchArgument(
         "sport_request_topic",
         default_value="/api/sport/request",
@@ -99,6 +104,7 @@ def generate_launch_description():
                 "odom_topic": "/utlidar/robot_odom",
                 "range_info_topic": "/utlidar/range_info",
                 "cloud_topic": "/utlidar/cloud_deskewed",
+                "height_map_topic": LaunchConfiguration("height_map_topic"),
             }
         ],
     )
@@ -140,6 +146,7 @@ def generate_launch_description():
             goal_topic,
             nav_cmd_topic,
             cmd_vel_topic,
+            height_map_topic,
             sport_request_topic,
             rviz,
             map_publisher,

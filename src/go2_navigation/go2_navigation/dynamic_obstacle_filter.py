@@ -9,6 +9,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
+from unitree_go.msg import HeightMap
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
@@ -28,6 +29,16 @@ class Clearance:
     right: float = math.inf
 
 
+@dataclass
+class TerrainAssessment:
+    max_step: float = 0.0
+    max_drop: float = 0.0
+    max_slope_deg: float = 0.0
+    front_score: float = 0.0
+    left_score: float = 0.0
+    right_score: float = 0.0
+
+
 class DynamicObstacleFilter(Node):
     """Fuse range and point-cloud data to stop, slow, or bias around obstacles."""
 
@@ -38,6 +49,9 @@ class DynamicObstacleFilter(Node):
         output_cmd_topic = self.declare_parameter("output_cmd_topic", "/cmd_vel").value
         range_info_topic = self.declare_parameter("range_info_topic", "/utlidar/range_info").value
         cloud_topic = self.declare_parameter("cloud_topic", "/utlidar/cloud_deskewed").value
+        height_map_topic = self.declare_parameter(
+            "height_map_topic", "/utlidar/height_map_array"
+        ).value
         odom_topic = self.declare_parameter("odom_topic", "/utlidar/robot_odom").value
         status_topic = self.declare_parameter(
             "status_topic", "/go2_navigation/obstacle_filter_status"
@@ -57,6 +71,7 @@ class DynamicObstacleFilter(Node):
         )
         self._use_range_info = bool(self.declare_parameter("use_range_info", True).value)
         self._use_cloud = bool(self.declare_parameter("use_cloud", True).value)
+        self._use_height_map = bool(self.declare_parameter("use_height_map", True).value)
 
         self._front_stop_distance = float(self.declare_parameter("front_stop_distance", 0.40).value)
         self._front_avoid_distance = float(
@@ -106,6 +121,51 @@ class DynamicObstacleFilter(Node):
             self.declare_parameter("side_selection_margin", 0.08).value
         )
 
+        self._terrain_hard_step_limit = float(
+            self.declare_parameter("terrain_hard_step_limit", 0.16).value
+        )
+        self._terrain_soft_step_limit = float(
+            self.declare_parameter("terrain_soft_step_limit", 0.10).value
+        )
+        self._terrain_hard_drop_limit = float(
+            self.declare_parameter("terrain_hard_drop_limit", 0.16).value
+        )
+        self._terrain_soft_drop_limit = float(
+            self.declare_parameter("terrain_soft_drop_limit", 0.10).value
+        )
+        self._terrain_hard_slope_deg = float(
+            self.declare_parameter("terrain_hard_slope_deg", 40.0).value
+        )
+        self._terrain_soft_slope_deg = float(
+            self.declare_parameter("terrain_soft_slope_deg", 30.0).value
+        )
+        self._terrain_forward_near = float(
+            self.declare_parameter("terrain_forward_near", 0.30).value
+        )
+        self._terrain_forward_far = float(
+            self.declare_parameter("terrain_forward_far", 1.00).value
+        )
+        self._terrain_half_width = float(self.declare_parameter("terrain_half_width", 0.25).value)
+        self._terrain_side_forward_far = float(
+            self.declare_parameter("terrain_side_forward_far", 0.80).value
+        )
+        self._terrain_side_inner_offset = float(
+            self.declare_parameter("terrain_side_inner_offset", 0.20).value
+        )
+        self._terrain_side_outer_offset = float(
+            self.declare_parameter("terrain_side_outer_offset", 0.50).value
+        )
+        self._terrain_base_near = float(self.declare_parameter("terrain_base_near", -0.20).value)
+        self._terrain_base_far = float(self.declare_parameter("terrain_base_far", 0.20).value)
+        self._terrain_base_half_width = float(
+            self.declare_parameter("terrain_base_half_width", 0.20).value
+        )
+        self._terrain_bias_gain = float(self.declare_parameter("terrain_bias_gain", 1.0).value)
+        self._terrain_bias_margin = float(
+            self.declare_parameter("terrain_bias_margin", 0.12).value
+        )
+        self._terrain_score_clip = float(self.declare_parameter("terrain_score_clip", 3.0).value)
+
         self._latest_cmd = Twist()
         self._latest_cmd_time = None
         self._motion_active = False
@@ -113,6 +173,8 @@ class DynamicObstacleFilter(Node):
         self._range_time = None
         self._cloud_clearance = Clearance()
         self._cloud_time = None
+        self._terrain_time = None
+        self._terrain = TerrainAssessment()
         self._odom_time = None
         self._robot_x = 0.0
         self._robot_y = 0.0
@@ -131,6 +193,7 @@ class DynamicObstacleFilter(Node):
         self.create_subscription(Odometry, odom_topic, self._odom_callback, 50)
         self.create_subscription(PointStamped, range_info_topic, self._range_callback, 20)
         self.create_subscription(PointCloud2, cloud_topic, self._cloud_callback, 10)
+        self.create_subscription(HeightMap, height_map_topic, self._height_map_callback, 10)
         self._timer = self.create_timer(1.0 / max(control_rate_hz, 1.0), self._on_timer)
 
         self.get_logger().info(
@@ -226,6 +289,139 @@ class DynamicObstacleFilter(Node):
         out.angular.z = msg.angular.z
         return out
 
+    def _normalize_hazard(self, value: float, soft_limit: float, hard_limit: float) -> float:
+        if value <= soft_limit:
+            return 0.0
+        span = max(hard_limit - soft_limit, 1e-6)
+        return clamp((value - soft_limit) / span, 0.0, self._terrain_score_clip)
+
+    def _terrain_score(self, step: float, drop: float, slope_deg: float) -> float:
+        return max(
+            self._normalize_hazard(
+                step, self._terrain_soft_step_limit, self._terrain_hard_step_limit
+            ),
+            self._normalize_hazard(
+                drop, self._terrain_soft_drop_limit, self._terrain_hard_drop_limit
+            ),
+            self._normalize_hazard(
+                slope_deg, self._terrain_soft_slope_deg, self._terrain_hard_slope_deg
+            ),
+        )
+
+    def _window_terrain(
+        self,
+        rel_x: np.ndarray,
+        rel_y: np.ndarray,
+        height: np.ndarray,
+        slope_deg: np.ndarray,
+        baseline_height: float,
+        mask: np.ndarray,
+    ) -> tuple[float, float, float, float]:
+        if not np.any(mask):
+            return 0.0, 0.0, math.inf, self._terrain_score_clip
+
+        window_height = height[mask]
+        finite_height = window_height[np.isfinite(window_height)]
+        if finite_height.size == 0:
+            return 0.0, 0.0, math.inf, self._terrain_score_clip
+
+        local_step = max(0.0, float(np.max(finite_height) - baseline_height))
+        local_drop = max(0.0, float(baseline_height - np.min(finite_height)))
+
+        local_slope_samples = slope_deg[mask]
+        local_slope_samples = local_slope_samples[np.isfinite(local_slope_samples)]
+        local_slope_deg = (
+            float(np.percentile(local_slope_samples, 90))
+            if local_slope_samples.size > 0
+            else math.inf
+        )
+        return (
+            local_step,
+            local_drop,
+            local_slope_deg,
+            self._terrain_score(local_step, local_drop, local_slope_deg),
+        )
+
+    def _height_map_callback(self, msg: HeightMap) -> None:
+        if not self._use_height_map or self._odom_time is None:
+            return
+
+        width = int(msg.width)
+        height_cells = int(msg.height)
+        expected_size = width * height_cells
+        if width <= 1 or height_cells <= 1 or len(msg.data) != expected_size:
+            self.get_logger().warn("Received invalid height map dimensions or data length")
+            return
+
+        resolution = float(msg.resolution)
+        if resolution <= 0.0:
+            self.get_logger().warn("Received non-positive height map resolution")
+            return
+
+        grid = np.asarray(msg.data, dtype=np.float32).reshape((height_cells, width))
+        xs = float(msg.origin[0]) + np.arange(width, dtype=np.float32) * resolution
+        ys = float(msg.origin[1]) + np.arange(height_cells, dtype=np.float32) * resolution
+        world_x, world_y = np.meshgrid(xs, ys, indexing="xy")
+
+        dx = world_x - self._robot_x
+        dy = world_y - self._robot_y
+        cos_yaw = math.cos(self._robot_yaw)
+        sin_yaw = math.sin(self._robot_yaw)
+        rel_x = cos_yaw * dx + sin_yaw * dy
+        rel_y = -sin_yaw * dx + cos_yaw * dy
+
+        base_mask = (
+            (rel_x >= self._terrain_base_near)
+            & (rel_x <= self._terrain_base_far)
+            & (np.abs(rel_y) <= self._terrain_base_half_width)
+        )
+        base_samples = grid[base_mask]
+        base_samples = base_samples[np.isfinite(base_samples)]
+        if base_samples.size == 0:
+            return
+        baseline_height = float(np.median(base_samples))
+
+        grad_y, grad_x = np.gradient(grid.astype(np.float64), resolution, resolution)
+        slope_deg = np.rad2deg(np.arctan(np.hypot(grad_x, grad_y)))
+
+        front_mask = (
+            (rel_x >= self._terrain_forward_near)
+            & (rel_x <= self._terrain_forward_far)
+            & (np.abs(rel_y) <= self._terrain_half_width)
+        )
+        left_mask = (
+            (rel_x >= self._terrain_forward_near)
+            & (rel_x <= self._terrain_side_forward_far)
+            & (rel_y >= self._terrain_side_inner_offset)
+            & (rel_y <= self._terrain_side_outer_offset)
+        )
+        right_mask = (
+            (rel_x >= self._terrain_forward_near)
+            & (rel_x <= self._terrain_side_forward_far)
+            & (rel_y <= -self._terrain_side_inner_offset)
+            & (rel_y >= -self._terrain_side_outer_offset)
+        )
+
+        front_step, front_drop, front_slope_deg, front_score = self._window_terrain(
+            rel_x, rel_y, grid, slope_deg, baseline_height, front_mask
+        )
+        left_step, left_drop, left_slope_deg, left_score = self._window_terrain(
+            rel_x, rel_y, grid, slope_deg, baseline_height, left_mask
+        )
+        right_step, right_drop, right_slope_deg, right_score = self._window_terrain(
+            rel_x, rel_y, grid, slope_deg, baseline_height, right_mask
+        )
+
+        self._terrain_time = self.get_clock().now()
+        self._terrain = TerrainAssessment(
+            max_step=front_step,
+            max_drop=front_drop,
+            max_slope_deg=front_slope_deg,
+            front_score=front_score,
+            left_score=left_score,
+            right_score=right_score,
+        )
+
     def _publish_state(self, state: str) -> None:
         if state == self._last_state:
             return
@@ -258,6 +454,18 @@ class DynamicObstacleFilter(Node):
             left=min(s.left for s in sources),
             right=min(s.right for s in sources),
         )
+
+    def _enabled_sensor_stale(self) -> bool:
+        sensor_times = []
+        if self._use_range_info:
+            sensor_times.append(self._range_time)
+        if self._use_cloud:
+            sensor_times.append(self._cloud_time)
+        if self._use_height_map:
+            sensor_times.append(self._terrain_time)
+        if not sensor_times:
+            return False
+        return all(self._timer_stale(stamp) for stamp in sensor_times)
 
     def _smooth_distance(self, previous: float, current: float) -> float:
         if not math.isfinite(previous):
@@ -327,13 +535,7 @@ class DynamicObstacleFilter(Node):
         clearance = self._smooth_clearance(self._combine_clearance())
         self._publish_fused_clearance(clearance)
 
-        if (
-            self._fail_safe_stop_on_stale
-            and self._use_range_info
-            and self._use_cloud
-            and self._timer_stale(self._range_time)
-            and self._timer_stale(self._cloud_time)
-        ):
+        if self._fail_safe_stop_on_stale and self._enabled_sensor_stale():
             self._publish_zero("stale_sensors")
             return
 
@@ -359,6 +561,37 @@ class DynamicObstacleFilter(Node):
             cmd.linear.x *= linear_factor
             cmd.linear.y *= linear_factor
             state = "slowdown"
+
+        terrain = self._terrain
+        terrain_fresh = self._use_height_map and not self._timer_stale(self._terrain_time)
+        if terrain_fresh:
+            terrain_hard_stop = (
+                terrain.max_step >= self._terrain_hard_step_limit
+                or terrain.max_drop >= self._terrain_hard_drop_limit
+                or terrain.max_slope_deg >= self._terrain_hard_slope_deg
+            )
+            if terrain_hard_stop and self._latest_cmd.linear.x > self._linear_deadband:
+                cmd.linear.x = 0.0
+                cmd.linear.y = 0.0
+                cmd.angular.z = 0.0
+                state = "terrain_stop"
+            else:
+                terrain_factor = 1.0 - clamp(terrain.front_score, 0.0, 1.0)
+                terrain_factor = max(self._minimum_slowdown_ratio, terrain_factor)
+                if terrain.front_score > 0.0:
+                    cmd.linear.x *= terrain_factor
+                    cmd.linear.y *= terrain_factor
+                    if state == "clear":
+                        state = "terrain_slowdown"
+
+                score_delta = terrain.left_score - terrain.right_score
+                if abs(score_delta) > self._terrain_bias_margin and state != "terrain_stop":
+                    bias_sign = -1.0 if score_delta > 0.0 else 1.0
+                    bias_scale = clamp(abs(score_delta), 0.0, 1.0) * self._terrain_bias_gain
+                    cmd.linear.y += bias_sign * self._avoid_lateral_speed * bias_scale
+                    cmd.angular.z += bias_sign * self._avoid_turn_speed * bias_scale
+                    if state in {"clear", "terrain_slowdown"}:
+                        state = "terrain_bias"
 
         if front < self._front_stop_distance and self._latest_cmd.linear.x > self._linear_deadband:
             side_sign = self._choose_avoid_direction(left, right)
@@ -403,7 +636,7 @@ class DynamicObstacleFilter(Node):
         cmd.linear.y = clamp(cmd.linear.y, -self._max_linear_y, self._max_linear_y)
         cmd.angular.z = clamp(cmd.angular.z, -self._max_angular_z, self._max_angular_z)
 
-        if state == "stop":
+        if state in {"stop", "terrain_stop"}:
             self._publish_zero(state)
             return
 
