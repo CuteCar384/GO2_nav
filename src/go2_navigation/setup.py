@@ -21,7 +21,11 @@ setup(
         ("share/" + package_name + "/config", ["config/go2_navigation.yaml"]),
         ("share/" + package_name + "/rviz_cfg", ["rviz_cfg/click_goal_nav.rviz"]),
     ],
-    install_requires=["setuptools"],
+    install_requires=[
+        "setuptools",
+        "mcp>=1.1.0",
+        "pydantic>=2.0.0",
+    ],
     zip_safe=True,
     maintainer="huang",
     maintainer_email="huang@example.com",
@@ -35,6 +39,9 @@ setup(
             "unitree_sport_bridge = go2_navigation.unitree_sport_bridge:main",
             "publish_goal = go2_navigation.publish_goal:main",
             "pcd_map_publisher = go2_navigation.pcd_map_publisher:main",
+            "named_pose_gui = go2_navigation.named_pose_gui:main",
+            "named_goal_gui = go2_navigation.named_goal_gui:main",
+            "navigation_mcp_server = go2_navigation.navigation_mcp_server:main",
         ],
     },
 )

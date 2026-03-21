@@ -13,7 +13,7 @@
 
 | 功能 | 包 | 主要输入 | 主要输出 | 说明 |
 | --- | --- | --- | --- | --- |
-| 建图 | `go2_mapping_minimal` | `/utlidar/cloud_deskewed` `/utlidar/robot_odom` | `/go2_built_map` `/go2_robot_path` `output/go2_built_map.pcd` | 在线累积去畸变点云，退出时保存二进制 PCD |
+| 建图 | `go2_mapping_minimal` | `/utlidar/cloud_deskewed` `/utlidar/robot_odom` | `/go2_built_map` `/go2_robot_path` `output/go2_built_map.pcd` `output/go2_named_poses.json` | 在线累积去畸变点云，退出时保存二进制 PCD；建图过程中可记录命名地点 |
 | 目标点导航 | `go2_navigation` | `/utlidar/robot_odom` `/goal_pose` | `/cmd_vel_nav` `/cmd_vel` `/api/sport/request` | 基于里程计的轻量闭环控制，不是完整 Nav2 |
 | 动态避障/地形过滤 | `go2_navigation` | `/cmd_vel_nav` `/utlidar/range_info` `/utlidar/cloud_deskewed` `/utlidar/height_map_array` `/utlidar/robot_odom` | `/cmd_vel` `/go2_navigation/obstacle_filter_status` `/go2_navigation/fused_range_info` | 在导航速度和运动执行之间做动态障碍急停、减速、绕行动作偏置，以及基于高度图的坡度/台阶/落差过滤 |
 | 图像发布 | `go2_camera_bridge` | Go2 前置相机 JPEG 流 | `/go2/front_camera/image_raw` `/go2/front_camera/image_raw/compressed` | 使用 `unitree_sdk2_python` 拉流，再桥接成标准 ROS 2 图像话题 |
@@ -23,7 +23,8 @@
 ```text
 ~/xxx
 ├── output
-│   └── go2_built_map.pcd
+│   ├── go2_built_map.pcd
+│   └── go2_named_poses.json
 ├── README.md
 ├── NAVIGATION_RESEARCH.md
 ├── 机器狗摄像头ROS2桥接简记.md
@@ -92,6 +93,16 @@ colcon build --symlink-install
 
 ## 1. 建图
 
+`mapping_go2_builtin.launch.py` 现在默认就是“边建图边导航”的组合模式。
+它会同时启动：
+
+- `go2_map_builder`：在线累积点云并保存 PCD
+- `simple_goal_controller`：目标点闭环控制
+- `dynamic_obstacle_filter`：动态障碍/地形过滤
+- `unitree_sport_bridge`：把 `Twist` 发给机器狗
+- `named_pose_gui`：记录命名点位到 JSON
+- `named_goal_gui`：从 JSON 里选点并直接导航
+
 启动：
 
 ```bash
@@ -112,16 +123,31 @@ ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py rviz:=false
 - `/utlidar/cloud_deskewed`
 - `/utlidar/robot_odom`
 
-运行时发布：
+运行时输出：
 
 - `/go2_built_map`
 - `/go2_robot_path`
+- `/cmd_vel_nav`
+- `/cmd_vel`
 
 退出时保存：
 
 ```text
 ~/xxx/output/go2_built_map.pcd
 ```
+
+运行时会弹出两个窗口：
+
+- 命名点位窗口：输入地点名并点击“保存当前点位”
+- 命名导航窗口：从 JSON 里选点并点击“发送选中目标”
+
+点位结果默认保存到：
+
+```text
+~/xxx/output/go2_named_poses.json
+```
+
+如果地点名重复，后一次保存会覆盖同名地点的旧坐标。界面里也可以直接删除选中的点位。
 
 常用参数：
 
@@ -136,12 +162,29 @@ ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
   odom_topic:=/utlidar/robot_odom
 ```
 
+```bash
+ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
+  named_pose_save_path:=/home/huang/xxx/output/my_named_poses.json
+```
+
+```bash
+ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
+  named_pose_gui:=false
+```
+
+```bash
+ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
+  named_goal_gui:=false
+```
+
 默认行为：
 
 - 每 5 帧点云发布一次在线累积地图
 - 每 10 帧点云做一次体素下采样
 - 默认体素大小 `0.10 m`
 - 收到 `Ctrl+C` 或节点退出时自动保存 PCD
+- 建图运行期间可通过图形界面记录当前 odom 点位，并生成 JSON 点位文件
+- 建图运行期间可直接发送目标点或命名点位，不需要再单独启动导航 launch
 
 ## 2. 目标点导航
 
@@ -205,6 +248,11 @@ source ~/xxx/install/setup.bash
 ros2 launch go2_navigation click_goal_nav.launch.py
 ```
 
+默认会同时打开：
+
+- RViz 点击目标界面
+- 命名点位导航界面，直接读取 `output/go2_named_poses.json`
+
 常用参数：
 
 ```bash
@@ -217,6 +265,16 @@ ros2 launch go2_navigation click_goal_nav.launch.py \
   rviz:=false
 ```
 
+```bash
+ros2 launch go2_navigation click_goal_nav.launch.py \
+  named_goal_gui:=false
+```
+
+```bash
+ros2 launch go2_navigation click_goal_nav.launch.py \
+  named_goal_json:=/home/huang/xxx/output/go2_named_poses.json
+```
+
 这个模式额外发布：
 
 - `/go2_saved_map`
@@ -224,6 +282,7 @@ ros2 launch go2_navigation click_goal_nav.launch.py \
 注意：
 
 - 这里的保存地图主要用于 RViz 显示和点击目标参考
+- 命名点位导航界面会直接把 JSON 里的点位发布到 `/goal_pose`
 - 当前并没有做基于保存地图的定位闭环
 - 控制仍然主要依赖 `/utlidar/robot_odom`
 
@@ -297,7 +356,34 @@ ros2 launch go2_navigation click_goal_nav.launch.py \
 
 如果你要调避障效果，优先看 `go2_dynamic_obstacle_filter` 这一组参数。
 
-## 4. 前置相机图像发布
+## 4. MCP 点位服务
+
+保存点位和发送点位现在也可以通过 MCP server 调用，不必依赖图形界面。
+
+启动：
+
+```bash
+cd ~/xxx
+source /opt/ros/jazzy/setup.bash
+source ~/xxx/install/setup.bash
+ros2 run go2_navigation navigation_mcp_server
+```
+
+这个 server 默认连接：
+
+- odom: `/utlidar/robot_odom`
+- goal: `/goal_pose`
+- JSON: `/home/huang/xxx/output/go2_named_poses.json`
+
+提供的 MCP tools：
+
+- `go2_get_current_pose`
+- `go2_list_named_poses`
+- `go2_save_named_pose`
+- `go2_delete_named_pose`
+- `go2_send_named_goal`
+
+## 5. 前置相机图像发布
 
 由于直接订阅某些 Unitree 视频消息时 ROS 2 侧反序列化不稳定，这里改成了通过 `unitree_sdk2_python` 主动拉取前置相机 JPEG，再桥接成标准图像话题。
 

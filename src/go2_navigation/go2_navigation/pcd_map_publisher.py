@@ -45,10 +45,35 @@ class ParsedPcd:
     point_count: int
 
 
+def resolve_pcd_path(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_file():
+        return candidate
+
+    if candidate.is_dir():
+        preferred = candidate / "output" / "go2_built_map.pcd"
+        if preferred.is_file():
+            return preferred
+
+        pcd_files = sorted(candidate.glob("*.pcd"))
+        if len(pcd_files) == 1:
+            return pcd_files[0]
+        if len(pcd_files) > 1:
+            raise ValueError(
+                f"pcd_path {candidate} is a directory with multiple .pcd files; pass the exact file path"
+            )
+        raise ValueError(
+            f"pcd_path {candidate} is a directory and no .pcd file was found; expected {preferred}"
+        )
+
+    raise FileNotFoundError(f"pcd_path does not exist: {candidate}")
+
+
 def parse_pcd(path: str) -> ParsedPcd:
     header = {}
     data_type = None
-    with Path(path).open("rb") as handle:
+    resolved_path = resolve_pcd_path(path)
+    with resolved_path.open("rb") as handle:
         while True:
             line = handle.readline()
             if not line:
@@ -118,7 +143,8 @@ class PcdMapPublisher(Node):
         publish_period = float(self.declare_parameter("publish_period", 1.0).value)
 
         self._frame_id = frame_id
-        self._pcd = parse_pcd(pcd_path)
+        self._pcd_path = str(resolve_pcd_path(pcd_path))
+        self._pcd = parse_pcd(self._pcd_path)
         qos = QoSProfile(depth=1)
         qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         qos.reliability = ReliabilityPolicy.RELIABLE
@@ -127,7 +153,7 @@ class PcdMapPublisher(Node):
         self._timer = self.create_timer(max(publish_period, 0.1), self._publish_map)
 
         self.get_logger().info(
-            f"Publishing saved map {pcd_path} with {self._pcd.point_count} points on {cloud_topic} in frame {frame_id}"
+            f"Publishing saved map {self._pcd_path} with {self._pcd.point_count} points on {cloud_topic} in frame {frame_id}"
         )
         self._publish_map()
 

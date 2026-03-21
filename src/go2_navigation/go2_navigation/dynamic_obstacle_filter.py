@@ -25,6 +25,7 @@ def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
 @dataclass
 class Clearance:
     front: float = math.inf
+    rear: float = math.inf
     left: float = math.inf
     right: float = math.inf
 
@@ -78,6 +79,8 @@ class DynamicObstacleFilter(Node):
             self.declare_parameter("front_avoid_distance", 0.75).value
         )
         self._front_slow_distance = float(self.declare_parameter("front_slow_distance", 1.20).value)
+        self._rear_stop_distance = float(self.declare_parameter("rear_stop_distance", 0.22).value)
+        self._rear_slow_distance = float(self.declare_parameter("rear_slow_distance", 0.55).value)
         self._side_stop_distance = float(self.declare_parameter("side_stop_distance", 0.18).value)
         self._side_slow_distance = float(self.declare_parameter("side_slow_distance", 0.32).value)
         self._minimum_slowdown_ratio = float(
@@ -107,6 +110,7 @@ class DynamicObstacleFilter(Node):
         self._cloud_rear_limit = float(self.declare_parameter("cloud_rear_limit", -0.20).value)
         self._cloud_side_limit = float(self.declare_parameter("cloud_side_limit", 1.20).value)
         self._front_half_width = float(self.declare_parameter("front_half_width", 0.35).value)
+        self._rear_half_width = float(self.declare_parameter("rear_half_width", 0.30).value)
         self._side_forward_min = float(self.declare_parameter("side_forward_min", -0.10).value)
         self._side_forward_max = float(self.declare_parameter("side_forward_max", 0.80).value)
         self._side_inner_offset = float(self.declare_parameter("side_inner_offset", 0.05).value)
@@ -165,6 +169,9 @@ class DynamicObstacleFilter(Node):
             self.declare_parameter("terrain_bias_margin", 0.12).value
         )
         self._terrain_score_clip = float(self.declare_parameter("terrain_score_clip", 3.0).value)
+        self._terrain_stop_hold_time = float(
+            self.declare_parameter("terrain_stop_hold_time", 0.5).value
+        )
 
         self._latest_cmd = Twist()
         self._latest_cmd_time = None
@@ -184,6 +191,7 @@ class DynamicObstacleFilter(Node):
         self._filtered_clearance = Clearance()
         self._avoid_direction_sign = 0.0
         self._avoid_direction_lock_until_ns = 0
+        self._terrain_stop_hold_until_ns = 0
 
         self._cmd_pub = self.create_publisher(Twist, output_cmd_topic, 10)
         self._status_pub = self.create_publisher(String, status_topic, 10)
@@ -257,6 +265,7 @@ class DynamicObstacleFilter(Node):
         )
 
         front_mask = base_mask & (forward > 0.0) & (np.abs(lateral) < self._front_half_width)
+        rear_mask = base_mask & (forward < 0.0) & (np.abs(lateral) < self._rear_half_width)
         left_mask = (
             base_mask
             & (forward > self._side_forward_min)
@@ -273,11 +282,12 @@ class DynamicObstacleFilter(Node):
         )
 
         front = float(np.min(forward[front_mask])) if np.any(front_mask) else math.inf
+        rear = float(np.min(-forward[rear_mask])) if np.any(rear_mask) else math.inf
         left = float(np.min(lateral[left_mask])) if np.any(left_mask) else math.inf
         right = float(np.min(-lateral[right_mask])) if np.any(right_mask) else math.inf
 
         self._cloud_time = self.get_clock().now()
-        self._cloud_clearance = Clearance(front=front, left=left, right=right)
+        self._cloud_clearance = Clearance(front=front, rear=rear, left=left, right=right)
 
     def _copy_twist(self, msg: Twist) -> Twist:
         out = Twist()
@@ -451,6 +461,7 @@ class DynamicObstacleFilter(Node):
             return Clearance()
         return Clearance(
             front=min(s.front for s in sources),
+            rear=min(s.rear for s in sources),
             left=min(s.left for s in sources),
             right=min(s.right for s in sources),
         )
@@ -479,6 +490,7 @@ class DynamicObstacleFilter(Node):
     def _smooth_clearance(self, clearance: Clearance) -> Clearance:
         self._filtered_clearance = Clearance(
             front=self._smooth_distance(self._filtered_clearance.front, clearance.front),
+            rear=self._smooth_distance(self._filtered_clearance.rear, clearance.rear),
             left=self._smooth_distance(self._filtered_clearance.left, clearance.left),
             right=self._smooth_distance(self._filtered_clearance.right, clearance.right),
         )
@@ -518,6 +530,9 @@ class DynamicObstacleFilter(Node):
         ratio = (distance - stop_distance) / span
         return self._minimum_slowdown_ratio + ratio * (1.0 - self._minimum_slowdown_ratio)
 
+    def _terrain_stop_active(self, now_ns: int) -> bool:
+        return now_ns < self._terrain_stop_hold_until_ns
+
     def _on_timer(self) -> None:
         if self._latest_cmd_time is None:
             return
@@ -542,8 +557,12 @@ class DynamicObstacleFilter(Node):
         cmd = self._copy_twist(self._latest_cmd)
         state = "clear"
         front = clearance.front
+        rear = clearance.rear
         left = clearance.left
         right = clearance.right
+        now_ns = self.get_clock().now().nanoseconds
+        moving_forward = self._latest_cmd.linear.x > self._linear_deadband
+        moving_reverse = self._latest_cmd.linear.x < -self._linear_deadband
 
         if left < self._side_stop_distance and cmd.linear.y > self._linear_deadband:
             cmd.linear.y = 0.0
@@ -555,8 +574,10 @@ class DynamicObstacleFilter(Node):
             cmd.angular.z = 0.0
 
         front_factor = self._slowdown_factor(front, self._front_stop_distance, self._front_slow_distance)
+        rear_factor = self._slowdown_factor(rear, self._rear_stop_distance, self._rear_slow_distance)
         side_factor = self._slowdown_factor(min(left, right), self._side_stop_distance, self._side_slow_distance)
-        linear_factor = min(front_factor, side_factor)
+        longitudinal_factor = front_factor if moving_forward else rear_factor if moving_reverse else 1.0
+        linear_factor = min(longitudinal_factor, side_factor)
         if linear_factor < 1.0:
             cmd.linear.x *= linear_factor
             cmd.linear.y *= linear_factor
@@ -570,12 +591,14 @@ class DynamicObstacleFilter(Node):
                 or terrain.max_drop >= self._terrain_hard_drop_limit
                 or terrain.max_slope_deg >= self._terrain_hard_slope_deg
             )
-            if terrain_hard_stop and self._latest_cmd.linear.x > self._linear_deadband:
-                cmd.linear.x = 0.0
-                cmd.linear.y = 0.0
-                cmd.angular.z = 0.0
-                state = "terrain_stop"
-            else:
+            if terrain_hard_stop and moving_forward:
+                self._terrain_stop_hold_until_ns = now_ns + int(self._terrain_stop_hold_time * 1e9)
+
+        if self._terrain_stop_active(now_ns) and moving_forward:
+            self._publish_zero("terrain_stop")
+            return
+
+        if terrain_fresh and not self._terrain_stop_active(now_ns):
                 terrain_factor = 1.0 - clamp(terrain.front_score, 0.0, 1.0)
                 terrain_factor = max(self._minimum_slowdown_ratio, terrain_factor)
                 if terrain.front_score > 0.0:
@@ -593,7 +616,12 @@ class DynamicObstacleFilter(Node):
                     if state in {"clear", "terrain_slowdown"}:
                         state = "terrain_bias"
 
-        if front < self._front_stop_distance and self._latest_cmd.linear.x > self._linear_deadband:
+        if rear < self._rear_stop_distance and moving_reverse:
+            cmd.linear.x = 0.0
+            cmd.linear.y = 0.0
+            cmd.angular.z = 0.0
+            state = "reverse_stop"
+        elif front < self._front_stop_distance and moving_forward:
             side_sign = self._choose_avoid_direction(left, right)
             side_open = max(left, right) > self._side_slow_distance
             if side_open:
@@ -606,7 +634,7 @@ class DynamicObstacleFilter(Node):
                 cmd.linear.y = 0.0
                 cmd.angular.z = 0.0
                 state = "stop"
-        elif front < self._front_avoid_distance and self._latest_cmd.linear.x > self._linear_deadband:
+        elif front < self._front_avoid_distance and moving_forward:
             closeness = (
                 (self._front_avoid_distance - front)
                 / max(self._front_avoid_distance - self._front_stop_distance, 1e-6)
@@ -636,7 +664,7 @@ class DynamicObstacleFilter(Node):
         cmd.linear.y = clamp(cmd.linear.y, -self._max_linear_y, self._max_linear_y)
         cmd.angular.z = clamp(cmd.angular.z, -self._max_angular_z, self._max_angular_z)
 
-        if state in {"stop", "terrain_stop"}:
+        if state in {"stop", "terrain_stop", "reverse_stop"}:
             self._publish_zero(state)
             return
 

@@ -19,6 +19,16 @@ def generate_launch_description():
         default_value="/home/huang/xxx/output/go2_built_map.pcd",
         description="Saved PCD map shown in RViz.",
     )
+    named_goal_json = DeclareLaunchArgument(
+        "named_goal_json",
+        default_value="/home/huang/xxx/output/go2_named_poses.json",
+        description="JSON file containing named navigation poses.",
+    )
+    named_goal_gui = DeclareLaunchArgument(
+        "named_goal_gui",
+        default_value="true",
+        description="Whether to launch the named-goal GUI for JSON waypoint selection.",
+    )
     map_topic = DeclareLaunchArgument(
         "map_topic",
         default_value="/go2_saved_map",
@@ -123,6 +133,20 @@ def generate_launch_description():
         ],
     )
 
+    named_goal_gui_node = Node(
+        package="go2_navigation",
+        executable="named_goal_gui",
+        name="go2_named_goal_gui",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("named_goal_gui")),
+        arguments=[
+            "--json",
+            LaunchConfiguration("named_goal_json"),
+            "--topic",
+            LaunchConfiguration("goal_topic"),
+        ],
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -141,6 +165,8 @@ def generate_launch_description():
         [
             params_file,
             map_pcd,
+            named_goal_json,
+            named_goal_gui,
             map_topic,
             map_frame,
             goal_topic,
@@ -153,6 +179,7 @@ def generate_launch_description():
             goal_controller,
             obstacle_filter,
             sport_bridge,
+            named_goal_gui_node,
             rviz_node,
         ]
     )

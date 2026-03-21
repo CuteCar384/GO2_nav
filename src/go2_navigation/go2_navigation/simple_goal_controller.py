@@ -59,11 +59,20 @@ class SimpleGoalController(Node):
         self._max_angular_z = float(self.declare_parameter("max_angular_z", 0.8).value)
         self._allow_reverse = bool(self.declare_parameter("allow_reverse", False).value)
         self._allow_lateral_motion = bool(self.declare_parameter("allow_lateral_motion", True).value)
+        self._align_final_yaw = bool(self.declare_parameter("align_final_yaw", True).value)
+        self._reverse_mode_switch_margin = float(
+            self.declare_parameter("reverse_mode_switch_margin", 0.20).value
+        )
+        self._max_linear_accel = float(self.declare_parameter("max_linear_accel", 0.8).value)
+        self._max_angular_accel = float(self.declare_parameter("max_angular_accel", 1.5).value)
 
         self._odom_frame = "odom"
         self._latest_pose: Optional[Pose] = None
         self._latest_pose_time = None
         self._goal: Optional[GoalState] = None
+        self._prefer_reverse = False
+        self._last_command = Twist()
+        self._last_control_time = None
 
         self._cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
         self._odom_sub = self.create_subscription(Odometry, odom_topic, self._odom_callback, 50)
@@ -89,12 +98,22 @@ class SimpleGoalController(Node):
             return
 
         self._goal = GoalState(pose=msg.pose, frame_id=goal_frame)
+        self._prefer_reverse = False
         self.get_logger().info(
             f"Received goal x={msg.pose.position.x:.3f}, y={msg.pose.position.y:.3f}, z={msg.pose.position.z:.3f}"
         )
 
     def _publish_zero(self) -> None:
-        self._cmd_pub.publish(Twist())
+        zero = Twist()
+        self._cmd_pub.publish(zero)
+        self._last_command = zero
+
+    def _apply_min_linear_speed(self, x_value: float, y_value: float) -> tuple[float, float]:
+        linear_speed = math.hypot(x_value, y_value)
+        if linear_speed < 1e-6 or linear_speed >= self._min_linear_speed:
+            return x_value, y_value
+        scale = self._min_linear_speed / linear_speed
+        return x_value * scale, y_value * scale
 
     def _apply_min_angular_speed(self, value: float) -> float:
         if abs(value) < 1e-6 or self._min_angular_speed <= 0.0:
@@ -116,6 +135,56 @@ class SimpleGoalController(Node):
         q = self._latest_pose.orientation
         return yaw_from_quaternion(q.x, q.y, q.z, q.w)
 
+    def _select_motion_heading(self, heading_to_goal: float, yaw: float) -> tuple[float, bool]:
+        forward_heading_error = normalize_angle(heading_to_goal - yaw)
+        if not self._allow_reverse:
+            self._prefer_reverse = False
+            return forward_heading_error, False
+
+        reverse_heading = normalize_angle(heading_to_goal + math.pi)
+        reverse_heading_error = normalize_angle(reverse_heading - yaw)
+        if abs(reverse_heading_error) + self._reverse_mode_switch_margin < abs(forward_heading_error):
+            self._prefer_reverse = True
+        elif abs(forward_heading_error) + self._reverse_mode_switch_margin < abs(reverse_heading_error):
+            self._prefer_reverse = False
+
+        if self._prefer_reverse:
+            return reverse_heading_error, True
+        return forward_heading_error, False
+
+    def _rate_limit(self, previous: float, target: float, max_delta: float) -> float:
+        if max_delta <= 0.0:
+            return target
+        return clamp(target, previous - max_delta, previous + max_delta)
+
+    def _rate_limit_command(self, command: Twist) -> Twist:
+        now = self.get_clock().now()
+        if self._last_control_time is None:
+            self._last_control_time = now
+            self._last_command = command
+            return command
+
+        dt = max((now - self._last_control_time).nanoseconds / 1e9, 0.0)
+        self._last_control_time = now
+        if dt <= 1e-6:
+            self._last_command = command
+            return command
+
+        limited = Twist()
+        linear_delta = self._max_linear_accel * dt
+        angular_delta = self._max_angular_accel * dt
+        limited.linear.x = self._rate_limit(self._last_command.linear.x, command.linear.x, linear_delta)
+        limited.linear.y = self._rate_limit(self._last_command.linear.y, command.linear.y, linear_delta)
+        limited.angular.z = self._rate_limit(
+            self._last_command.angular.z, command.angular.z, angular_delta
+        )
+        self._last_command = limited
+        return limited
+
+    def _publish_command(self, command: Twist) -> None:
+        limited = self._rate_limit_command(command)
+        self._cmd_pub.publish(limited)
+
     def _on_timer(self) -> None:
         if self._goal is None:
             return
@@ -133,12 +202,17 @@ class SimpleGoalController(Node):
         yaw = self._current_yaw()
         goal_yaw = self._goal_yaw()
         heading_to_goal = math.atan2(dy, dx)
-        heading_error = normalize_angle(heading_to_goal - yaw)
+        heading_error, using_reverse = self._select_motion_heading(heading_to_goal, yaw)
         final_yaw_error = normalize_angle(goal_yaw - yaw)
 
         command = Twist()
 
         if distance <= self._position_tolerance:
+            if not self._align_final_yaw:
+                self._publish_zero()
+                self.get_logger().info("Goal reached")
+                self._goal = None
+                return
             if abs(final_yaw_error) <= self._yaw_tolerance:
                 self._publish_zero()
                 self.get_logger().info("Goal reached")
@@ -151,7 +225,7 @@ class SimpleGoalController(Node):
                 self._max_angular_z,
             )
             command.angular.z = self._apply_min_angular_speed(command.angular.z)
-            self._cmd_pub.publish(command)
+            self._publish_command(command)
             return
 
         if abs(heading_error) > self._rotate_in_place_threshold and not self._allow_reverse:
@@ -161,7 +235,7 @@ class SimpleGoalController(Node):
                 self._max_angular_z,
             )
             command.angular.z = self._apply_min_angular_speed(command.angular.z)
-            self._cmd_pub.publish(command)
+            self._publish_command(command)
             return
 
         cos_yaw = math.cos(yaw)
@@ -173,7 +247,12 @@ class SimpleGoalController(Node):
         if not self._allow_lateral_motion:
             lateral_error = 0.0
 
-        command.linear.x = clamp(self._k_forward * forward_error, min_linear_x, self._max_linear_x)
+        target_linear_x = self._k_forward * forward_error
+        if using_reverse and target_linear_x > 0.0:
+            target_linear_x = 0.0
+        if not using_reverse and target_linear_x < 0.0:
+            target_linear_x = 0.0
+        command.linear.x = clamp(target_linear_x, min_linear_x, self._max_linear_x)
         command.linear.y = clamp(
             self._k_lateral * lateral_error,
             -self._max_linear_y,
@@ -191,14 +270,11 @@ class SimpleGoalController(Node):
             scale = self._max_linear_speed / linear_speed
             command.linear.x *= scale
             command.linear.y *= scale
-            linear_speed = self._max_linear_speed
+        command.linear.x, command.linear.y = self._apply_min_linear_speed(
+            command.linear.x, command.linear.y
+        )
 
-        if 1e-6 < linear_speed < self._min_linear_speed:
-            scale = self._min_linear_speed / linear_speed
-            command.linear.x *= scale
-            command.linear.y *= scale
-
-        self._cmd_pub.publish(command)
+        self._publish_command(command)
 
 
 def main() -> None:
