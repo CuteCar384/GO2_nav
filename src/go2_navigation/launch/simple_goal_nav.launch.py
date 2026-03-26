@@ -21,7 +21,12 @@ def generate_launch_description():
     goal_topic = DeclareLaunchArgument(
         "goal_topic",
         default_value="/goal_pose",
-        description="PoseStamped goal topic.",
+        description="Optional PoseStamped single-goal topic.",
+    )
+    path_topic = DeclareLaunchArgument(
+        "path_topic",
+        default_value="/pct_path",
+        description="nav_msgs/Path topic used for local path tracking.",
     )
     nav_cmd_topic = DeclareLaunchArgument(
         "nav_cmd_topic",
@@ -54,6 +59,7 @@ def generate_launch_description():
             {
                 "odom_topic": LaunchConfiguration("odom_topic"),
                 "goal_topic": LaunchConfiguration("goal_topic"),
+                "path_topic": LaunchConfiguration("path_topic"),
                 "cmd_vel_topic": LaunchConfiguration("nav_cmd_topic"),
             }
         ],
@@ -96,6 +102,7 @@ def generate_launch_description():
             params_file,
             odom_topic,
             goal_topic,
+            path_topic,
             nav_cmd_topic,
             cmd_vel_topic,
             height_map_topic,

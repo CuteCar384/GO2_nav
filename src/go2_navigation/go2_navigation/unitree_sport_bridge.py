@@ -105,7 +105,17 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        if rclpy.ok():
-            node._publish_stop()
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            if rclpy.ok():
+                node._publish_stop()
+        except Exception:
+            pass
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass

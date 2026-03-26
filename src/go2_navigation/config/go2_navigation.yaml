@@ -1,5 +1,5 @@
 # go2_simple_goal_controller:
-# 基于里程计的点到点闭环控制器，负责把 RViz 目标点转换成 Twist 速度命令。
+# 基于里程计的局部跟踪控制器，可优先跟踪 nav_msgs/Path 路径，也兼容单个 PoseStamped 目标点。
 go2_simple_goal_controller:
   ros__parameters:
     # 控制循环频率，单位 Hz。越高响应越快，但对传感器和计算稳定性要求也更高。
@@ -44,6 +44,10 @@ go2_simple_goal_controller:
     max_linear_accel: 0.80
     # 角速度斜坡上限，单位 rad/s^2，用于减小转向突变。
     max_angular_accel: 1.50
+    # 路径跟踪时选择前视目标点的距离，单位米；越大越平滑，越小越贴路径。
+    path_lookahead_distance: 0.45
+    # 当前机体和已跟踪路径偏离超过该值时，允许从整条新路径重新寻找最近点，单位米。
+    path_replan_reset_distance: 0.75
 
 # go2_dynamic_obstacle_filter:
 # 对导航控制器输出的原始速度进行二次约束，融合测距、点云和高程图做减速、停止和绕障。

@@ -36,7 +36,7 @@ class Go2MapBuilder : public rclcpp::Node {
     downsample_every_n_scans_ = declare_parameter<int>("downsample_every_n_scans", 10);
     save_path_ = declare_parameter<std::string>("save_path", "/home/huang/xxx/output/go2_built_map.pcd");
 
-    auto cloud_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+    auto cloud_qos = rclcpp::SensorDataQoS();
     auto odom_qos = rclcpp::QoS(rclcpp::KeepLast(50)).reliable();
 
     cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -65,14 +65,7 @@ class Go2MapBuilder : public rclcpp::Node {
       return;
     }
 
-    pcl::PointCloud<PointType> filtered;
-    pcl::VoxelGrid<PointType> voxel;
-    voxel.setLeafSize(
-        static_cast<float>(voxel_leaf_size_),
-        static_cast<float>(voxel_leaf_size_),
-        static_cast<float>(voxel_leaf_size_));
-    voxel.setInputCloud(map_cloud_);
-    voxel.filter(filtered);
+    pcl::PointCloud<PointType> filtered = applyVoxelFilter(map_cloud_);
 
     if (pcl::io::savePCDFileBinary(save_path_, filtered) == 0) {
       RCLCPP_INFO(get_logger(), "Saved %zu points to %s", filtered.size(), save_path_.c_str());
@@ -83,6 +76,23 @@ class Go2MapBuilder : public rclcpp::Node {
   }
 
  private:
+  pcl::PointCloud<PointType> applyVoxelFilter(
+      const pcl::PointCloud<PointType>::Ptr &input_cloud) const {
+    if (voxel_leaf_size_ <= 0.0) {
+      return *input_cloud;
+    }
+
+    pcl::PointCloud<PointType> filtered;
+    pcl::VoxelGrid<PointType> voxel;
+    voxel.setLeafSize(
+        static_cast<float>(voxel_leaf_size_),
+        static_cast<float>(voxel_leaf_size_),
+        static_cast<float>(voxel_leaf_size_));
+    voxel.setInputCloud(input_cloud);
+    voxel.filter(filtered);
+    return filtered;
+  }
+
   void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     pcl::PointCloud<PointType> cloud;
     pcl::fromROSMsg(*msg, cloud);
@@ -90,19 +100,24 @@ class Go2MapBuilder : public rclcpp::Node {
       return;
     }
 
+    if (!received_cloud_) {
+      received_cloud_ = true;
+      RCLCPP_INFO(
+          get_logger(),
+          "Received first cloud on %s (frame=%s, width=%u, height=%u)",
+          cloud_topic_.c_str(),
+          msg->header.frame_id.c_str(),
+          msg->width,
+          msg->height);
+    }
+
     *map_cloud_ += cloud;
     ++scan_count_;
     map_frame_id_ = msg->header.frame_id;
 
     if (downsample_every_n_scans_ > 0 && scan_count_ % downsample_every_n_scans_ == 0) {
-      pcl::PointCloud<PointType>::Ptr filtered(new pcl::PointCloud<PointType>());
-      pcl::VoxelGrid<PointType> voxel;
-      voxel.setLeafSize(
-          static_cast<float>(voxel_leaf_size_),
-          static_cast<float>(voxel_leaf_size_),
-          static_cast<float>(voxel_leaf_size_));
-      voxel.setInputCloud(map_cloud_);
-      voxel.filter(*filtered);
+      pcl::PointCloud<PointType>::Ptr filtered(
+          new pcl::PointCloud<PointType>(applyVoxelFilter(map_cloud_)));
       map_cloud_.swap(filtered);
     }
 
@@ -136,6 +151,7 @@ class Go2MapBuilder : public rclcpp::Node {
   int downsample_every_n_scans_;
   int scan_count_ = 0;
   bool saved_ = false;
+  bool received_cloud_ = false;
 
   pcl::PointCloud<PointType>::Ptr map_cloud_;
   nav_msgs::msg::Path path_msg_;

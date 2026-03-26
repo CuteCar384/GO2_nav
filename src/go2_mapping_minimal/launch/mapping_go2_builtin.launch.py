@@ -22,6 +22,15 @@ def generate_launch_description():
     save_path_arg = DeclareLaunchArgument(
         'save_path', default_value='/home/huang/xxx/output/go2_built_map.pcd',
         description='PCD output file path.')
+    voxel_leaf_size_arg = DeclareLaunchArgument(
+        'voxel_leaf_size', default_value='0.05',
+        description='Voxel leaf size in meters. Use 0 or a negative value to disable voxel filtering.')
+    publish_every_n_scans_arg = DeclareLaunchArgument(
+        'publish_every_n_scans', default_value='5',
+        description='Publish the accumulated map every N scans. Use 0 to disable periodic publishing.')
+    downsample_every_n_scans_arg = DeclareLaunchArgument(
+        'downsample_every_n_scans', default_value='10',
+        description='Apply voxel downsampling every N scans. Use 0 to disable periodic downsampling.')
 
     named_pose_save_path_arg = DeclareLaunchArgument(
         'named_pose_save_path', default_value='/home/huang/xxx/output/go2_named_poses.json',
@@ -38,6 +47,9 @@ def generate_launch_description():
     goal_topic_arg = DeclareLaunchArgument(
         'goal_topic', default_value='/goal_pose',
         description='PoseStamped goal topic used by mapping-time navigation.')
+    path_topic_arg = DeclareLaunchArgument(
+        'path_topic', default_value='/pct_path',
+        description='nav_msgs/Path topic used by mapping-time local tracking.')
     nav_cmd_topic_arg = DeclareLaunchArgument(
         'nav_cmd_topic', default_value='/cmd_vel_nav',
         description='Raw navigation velocity before obstacle filtering.')
@@ -67,9 +79,9 @@ def generate_launch_description():
             'odom_topic': LaunchConfiguration('odom_topic'),
             'map_topic': '/go2_built_map',
             'path_topic': '/go2_robot_path',
-            'voxel_leaf_size': 0.10,
-            'publish_every_n_scans': 5,
-            'downsample_every_n_scans': 10,
+            'voxel_leaf_size': LaunchConfiguration('voxel_leaf_size'),
+            'publish_every_n_scans': LaunchConfiguration('publish_every_n_scans'),
+            'downsample_every_n_scans': LaunchConfiguration('downsample_every_n_scans'),
             'save_path': LaunchConfiguration('save_path'),
         }]
     )
@@ -97,6 +109,7 @@ def generate_launch_description():
             {
                 'odom_topic': LaunchConfiguration('odom_topic'),
                 'goal_topic': LaunchConfiguration('goal_topic'),
+                'path_topic': LaunchConfiguration('path_topic'),
                 'cmd_vel_topic': LaunchConfiguration('nav_cmd_topic'),
             }
         ]
@@ -165,10 +178,14 @@ def generate_launch_description():
         cloud_topic_arg,
         odom_topic_arg,
         save_path_arg,
+        voxel_leaf_size_arg,
+        publish_every_n_scans_arg,
+        downsample_every_n_scans_arg,
         named_pose_save_path_arg,
         named_pose_gui_arg,
         params_file_arg,
         goal_topic_arg,
+        path_topic_arg,
         nav_cmd_topic_arg,
         cmd_vel_topic_arg,
         height_map_topic_arg,

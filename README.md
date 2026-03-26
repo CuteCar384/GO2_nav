@@ -177,14 +177,37 @@ ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
   named_goal_gui:=false
 ```
 
+```bash
+ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
+  voxel_leaf_size:=0.05
+```
+
+```bash
+ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
+  voxel_leaf_size:=0.03 \
+  downsample_every_n_scans:=20
+```
+
+```bash
+ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
+  voxel_leaf_size:=0 \
+  downsample_every_n_scans:=0
+```
+
 默认行为：
 
 - 每 5 帧点云发布一次在线累积地图
 - 每 10 帧点云做一次体素下采样
-- 默认体素大小 `0.10 m`
+- 默认体素大小 `0.05 m`
 - 收到 `Ctrl+C` 或节点退出时自动保存 PCD
 - 建图运行期间可通过图形界面记录当前 odom 点位，并生成 JSON 点位文件
 - 建图运行期间可直接发送目标点或命名点位，不需要再单独启动导航 launch
+
+建图稠密度说明：
+
+- `voxel_leaf_size` 越小，地图越密，文件更大，内存和 CPU 占用也更高
+- `downsample_every_n_scans` 越大，在线地图会保留更多原始点，但运行更吃内存
+- `voxel_leaf_size:=0` 且 `downsample_every_n_scans:=0` 表示关闭体素滤波，能得到最密结果，但最容易把机器拖慢
 
 ## 2. 目标点导航
 
