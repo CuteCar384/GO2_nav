@@ -2,12 +2,15 @@
 #include <memory>
 #include <string>
 
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
+#include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -111,9 +114,32 @@ class Go2MapBuilder : public rclcpp::Node {
           msg->height);
     }
 
-    *map_cloud_ += cloud;
+    pcl::PointCloud<PointType> cloud_in_map;
+    if (!latest_odom_received_) {
+      if (!warned_missing_odom_) {
+        RCLCPP_WARN(
+            get_logger(),
+            "No odometry received yet on %s, skip cloud accumulation until odom is available.",
+            odom_topic_.c_str());
+        warned_missing_odom_ = true;
+      }
+      return;
+    }
+
+    if (msg->header.frame_id == latest_odom_frame_id_) {
+      cloud_in_map = cloud;
+    } else {
+      Eigen::Isometry3f odom_transform = Eigen::Isometry3f::Identity();
+      odom_transform.translation() =
+          latest_odom_position_.cast<float>();
+      odom_transform.linear() =
+          latest_odom_orientation_.toRotationMatrix().cast<float>();
+      pcl::transformPointCloud(cloud, cloud_in_map, odom_transform.matrix());
+    }
+
+    *map_cloud_ += cloud_in_map;
     ++scan_count_;
-    map_frame_id_ = msg->header.frame_id;
+    map_frame_id_ = latest_odom_frame_id_;
 
     if (downsample_every_n_scans_ > 0 && scan_count_ % downsample_every_n_scans_ == 0) {
       pcl::PointCloud<PointType>::Ptr filtered(
@@ -131,6 +157,19 @@ class Go2MapBuilder : public rclcpp::Node {
   }
 
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    latest_odom_position_ = Eigen::Vector3d(
+        msg->pose.pose.position.x,
+        msg->pose.pose.position.y,
+        msg->pose.pose.position.z);
+    latest_odom_orientation_ = Eigen::Quaterniond(
+        msg->pose.pose.orientation.w,
+        msg->pose.pose.orientation.x,
+        msg->pose.pose.orientation.y,
+        msg->pose.pose.orientation.z);
+    latest_odom_orientation_.normalize();
+    latest_odom_frame_id_ = msg->header.frame_id.empty() ? "odom" : msg->header.frame_id;
+    latest_odom_received_ = true;
+
     geometry_msgs::msg::PoseStamped pose;
     pose.header = msg->header;
     pose.pose = msg->pose.pose;
@@ -152,6 +191,12 @@ class Go2MapBuilder : public rclcpp::Node {
   int scan_count_ = 0;
   bool saved_ = false;
   bool received_cloud_ = false;
+  bool latest_odom_received_ = false;
+  bool warned_missing_odom_ = false;
+
+  Eigen::Vector3d latest_odom_position_ = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond latest_odom_orientation_ = Eigen::Quaterniond::Identity();
+  std::string latest_odom_frame_id_ = "odom";
 
   pcl::PointCloud<PointType>::Ptr map_cloud_;
   nav_msgs::msg::Path path_msg_;

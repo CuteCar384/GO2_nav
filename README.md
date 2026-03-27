@@ -3,8 +3,7 @@
 这个工作区当前已经实现 4 块能力：
 
 - 建图
-- 目标点导航
-- 动态避障
+- 基于 EGO-Planner 的局部导航避障
 - 前置相机图像发布
 
 它不是只做建图的最小仓库了，而是一个围绕 Unitree Go2 搭起来的轻量 ROS 2 工作区。当前实现更适合现场调试、闭环验证和后续功能扩展。
@@ -14,8 +13,7 @@
 | 功能 | 包 | 主要输入 | 主要输出 | 说明 |
 | --- | --- | --- | --- | --- |
 | 建图 | `go2_mapping_minimal` | `/utlidar/cloud_deskewed` `/utlidar/robot_odom` | `/go2_built_map` `/go2_robot_path` `output/go2_built_map.pcd` `output/go2_named_poses.json` | 在线累积去畸变点云，退出时保存二进制 PCD；建图过程中可记录命名地点 |
-| 目标点导航 | `go2_navigation` | `/utlidar/robot_odom` `/goal_pose` | `/cmd_vel_nav` `/cmd_vel` `/api/sport/request` | 基于里程计的轻量闭环控制，不是完整 Nav2 |
-| 动态避障/地形过滤 | `go2_navigation` | `/cmd_vel_nav` `/utlidar/range_info` `/utlidar/cloud_deskewed` `/utlidar/height_map_array` `/utlidar/robot_odom` | `/cmd_vel` `/go2_navigation/obstacle_filter_status` `/go2_navigation/fused_range_info` | 在导航速度和运动执行之间做动态障碍急停、减速、绕行动作偏置，以及基于高度图的坡度/台阶/落差过滤 |
+| 局部导航避障 | `ego_planner` `go2_navigation` | `/utlidar/robot_odom` `/utlidar/cloud_deskewed` `/pct_path` | `planning/bspline` `/cmd_vel` `/api/sport/request` | 用 EGO-Planner 做局部占据图、重规划和避障，再把 B-spline 轨迹转换成机器狗速度命令 |
 | 图像发布 | `go2_camera_bridge` | Go2 前置相机 JPEG 流 | `/go2/front_camera/image_raw` `/go2/front_camera/image_raw/compressed` | 使用 `unitree_sdk2_python` 拉流，再桥接成标准 ROS 2 图像话题 |
 
 ## 目录结构
@@ -31,7 +29,12 @@
 └── src
     ├── go2_camera_bridge
     ├── go2_mapping_minimal
-    └── go2_navigation
+    ├── go2_navigation
+    ├── traj_utils
+    ├── plan_env
+    ├── path_searching
+    ├── bspline_opt
+    └── ego_planner
 ```
 
 ## 环境依赖
@@ -61,9 +64,8 @@
 建议先确认现场能看到这些关键话题：
 
 - `/utlidar/cloud_deskewed`
-- `/utlidar/height_map_array`
 - `/utlidar/robot_odom`
-- `/utlidar/range_info`
+- `/pct_path`
 - `/api/sport/request`
 
 如果还没装基础依赖，可以先执行：
@@ -93,15 +95,14 @@ colcon build --symlink-install
 
 ## 1. 建图
 
-`mapping_go2_builtin.launch.py` 现在默认就是“边建图边导航”的组合模式。
+`mapping_go2_builtin.launch.py` 现在默认就是“边建图边跑 EGO 局部规划”的组合模式。
 它会同时启动：
 
 - `go2_map_builder`：在线累积点云并保存 PCD
-- `simple_goal_controller`：目标点闭环控制
-- `dynamic_obstacle_filter`：动态障碍/地形过滤
+- `ego_planner_node`：基于点云和 odom 的局部规划与避障
+- `go2_traj_server`：把 B-spline 局部轨迹转换成 `Twist`
 - `unitree_sport_bridge`：把 `Twist` 发给机器狗
 - `named_pose_gui`：记录命名点位到 JSON
-- `named_goal_gui`：从 JSON 里选点并直接导航
 
 启动：
 
@@ -127,7 +128,6 @@ ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py rviz:=false
 
 - `/go2_built_map`
 - `/go2_robot_path`
-- `/cmd_vel_nav`
 - `/cmd_vel`
 
 退出时保存：
@@ -209,17 +209,11 @@ ros2 launch go2_mapping_minimal mapping_go2_builtin.launch.py \
 - `downsample_every_n_scans` 越大，在线地图会保留更多原始点，但运行更吃内存
 - `voxel_leaf_size:=0` 且 `downsample_every_n_scans:=0` 表示关闭体素滤波，能得到最密结果，但最容易把机器拖慢
 
-## 2. 目标点导航
+## 2. 局部导航
 
-当前导航链路由 3 个节点组成：
+这条链路现在是“参考路径 + 局部重规划 + 避障”的 EGO 本地导航，不再使用旧的 simple goal controller / obstacle filter。
 
-- `simple_goal_controller`：用里程计做目标点闭环控制
-- `dynamic_obstacle_filter`：对导航速度做动态障碍过滤
-- `unitree_sport_bridge`：把 `Twist` 转成 Unitree Sport API 请求
-
-这条链路是“轻量目标点导航”，不是完整 Nav2 全局规划/局部规划栈。
-
-### 2.1 直接发目标点导航
+### 2.1 直接启动 EGO 局部导航
 
 启动：
 
@@ -233,34 +227,30 @@ ros2 launch go2_navigation simple_goal_nav.launch.py
 默认话题流向：
 
 ```text
-/goal_pose -> simple_goal_controller -> /cmd_vel_nav
-                                        |
-                                        v
-                    dynamic_obstacle_filter -> /cmd_vel
-                                                 |
-                                                 v
-                                  unitree_sport_bridge -> /api/sport/request
+/pct_path + /utlidar/cloud_deskewed + /utlidar/robot_odom
+                    |
+                    v
+              ego_planner_node -> planning/bspline
+                    |
+                    v
+               go2_traj_server -> /cmd_vel
+                    |
+                    v
+        unitree_sport_bridge -> /api/sport/request
 ```
 
-如果你想从命令行发一个目标点，可以这样测：
+如果你已经有上游路径规划器，保证它持续发布 `/pct_path` 即可。
+如果你只是想手工测试，也可以先临时发一个 `nav_msgs/Path` 到 `/pct_path`。
 
-```bash
-cd ~/xxx
-source /opt/ros/jazzy/setup.bash
-source ~/xxx/install/setup.bash
-ros2 run go2_navigation publish_goal --topic /goal_pose --frame-id odom --x 1.0 --y 0.0 --yaw 0.0
-```
+常用输入：
 
-说明：
+- `/pct_path`
+- `/utlidar/cloud_deskewed`
+- `/utlidar/robot_odom`
 
-- `simple_goal_nav.launch.py` 默认订阅目标话题是 `/goal_pose`
-- `publish_goal` 工具自身默认话题是 `/go2_navigation/goal`
-- 所以命令行测试时建议显式加上 `--topic /goal_pose`
-- 目标点的 `frame_id` 需要和里程计帧一致，默认按 `odom` 使用
+### 2.2 加载保存地图并查看局部规划
 
-### 2.2 加载保存地图并在 RViz 点击目标导航
-
-这个模式会把保存好的 PCD 地图发布出来，方便在 RViz 里可视化和点目标。
+这个模式会把保存好的 PCD 地图发布出来，方便在 RViz 里查看地图和局部规划。
 
 启动：
 
@@ -271,10 +261,7 @@ source ~/xxx/install/setup.bash
 ros2 launch go2_navigation click_goal_nav.launch.py
 ```
 
-默认会同时打开：
-
-- RViz 点击目标界面
-- 命名点位导航界面，直接读取 `output/go2_named_poses.json`
+默认会同时打开 RViz。
 
 常用参数：
 
@@ -288,36 +275,15 @@ ros2 launch go2_navigation click_goal_nav.launch.py \
   rviz:=false
 ```
 
-```bash
-ros2 launch go2_navigation click_goal_nav.launch.py \
-  named_goal_gui:=false
-```
-
-```bash
-ros2 launch go2_navigation click_goal_nav.launch.py \
-  named_goal_json:=/home/huang/xxx/output/go2_named_poses.json
-```
-
 这个模式额外发布：
 
 - `/go2_saved_map`
 
 注意：
 
-- 这里的保存地图主要用于 RViz 显示和点击目标参考
-- 命名点位导航界面会直接把 JSON 里的点位发布到 `/goal_pose`
-- 当前并没有做基于保存地图的定位闭环
-- 控制仍然主要依赖 `/utlidar/robot_odom`
-
-## 3. 动态避障
-
-动态避障默认已经接在两个导航 launch 里，不需要单独插线。
-
-传感器输入：
-
-- `/utlidar/range_info`
-- `/utlidar/cloud_deskewed`
-- `/utlidar/height_map_array`
+- 这里的保存地图主要用于 RViz 显示参考
+- 实际局部避障依赖实时 `/utlidar/cloud_deskewed` 和 `/utlidar/robot_odom`
+- 当前主导航输入是 `/pct_path`，不是 `/goal_pose`
 - `/utlidar/robot_odom`
 
 默认输出：
@@ -363,21 +329,12 @@ src/go2_navigation/config/go2_navigation.yaml
 
 两个导航 launch 都支持覆盖高度图话题：
 
-```bash
-ros2 launch go2_navigation simple_goal_nav.launch.py \
-  height_map_topic:=/utlidar/height_map_array
-```
+如果你要调避障效果，优先看：
 
-```bash
-ros2 launch go2_navigation click_goal_nav.launch.py \
-  height_map_topic:=/utlidar/height_map_array
-```
-- `front_avoid_distance: 0.75`
-- `front_slow_distance: 1.20`
-- `side_stop_distance: 0.18`
-- `side_slow_distance: 0.32`
-
-如果你要调避障效果，优先看 `go2_dynamic_obstacle_filter` 这一组参数。
+- `ego_planner_node` 下的 `grid_map/*`
+- `ego_planner_node` 下的 `manager/*`
+- `ego_planner_node` 下的 `optimization/*`
+- `go2_traj_server` 下的速度与朝向跟踪参数
 
 ## 4. MCP 点位服务
 

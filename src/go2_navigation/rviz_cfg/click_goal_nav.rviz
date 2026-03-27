@@ -52,6 +52,46 @@ Visualization Manager:
       Topic:
         Value: /goal_pose
       Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: GoalMarker
+      Namespaces:
+        {}
+      Topic:
+        Value: /goal_point
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: GlobalPath
+      Namespaces:
+        {}
+      Topic:
+        Value: /global_list
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: InitPath
+      Namespaces:
+        {}
+      Topic:
+        Value: /init_list
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: OptimalPath
+      Namespaces:
+        {}
+      Topic:
+        Value: /optimal_list
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: AStarPath
+      Namespaces:
+        {}
+      Topic:
+        Value: /a_star_list
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0

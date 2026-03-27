@@ -37,6 +37,7 @@ class UnitreeSportBridge(Node):
         self._last_twist = Twist()
         self._last_command_time = None
         self._motion_active = False
+        self._last_logged_command = None
 
         self._request_pub = self.create_publisher(Request, sport_request_topic, 10)
         self._cmd_sub = self.create_subscription(Twist, cmd_vel_topic, self._cmd_callback, 10)
@@ -75,6 +76,13 @@ class UnitreeSportBridge(Node):
         if 1e-6 < abs(wz) < self._min_angular_speed:
             wz = math.copysign(self._min_angular_speed, wz)
 
+        command_key = (round(vx, 3), round(vy, 3), round(wz, 3))
+        if command_key != self._last_logged_command:
+            self.get_logger().info(
+                f"Sending Move request: vx={vx:.3f}, vy={vy:.3f}, wz={wz:.3f}"
+            )
+            self._last_logged_command = command_key
+
         self._request_pub.publish(self._builder.build_move_request(vx, vy, wz))
         self._motion_active = math.hypot(vx, vy) > 0.0 or abs(wz) > 0.0
 
@@ -87,11 +95,13 @@ class UnitreeSportBridge(Node):
             if self._motion_active:
                 self._publish_stop()
                 self.get_logger().info("cmd_vel timeout, sent StopMove")
+                self._last_logged_command = None
             return
 
         if self._is_zero_command(self._last_twist):
             if self._motion_active:
                 self._publish_stop()
+                self._last_logged_command = None
             return
 
         self._publish_move(self._last_twist)

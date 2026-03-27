@@ -34,10 +34,9 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "dynamic_obstacle_filter = go2_navigation.dynamic_obstacle_filter:main",
-            "simple_goal_controller = go2_navigation.simple_goal_controller:main",
             "unitree_sport_bridge = go2_navigation.unitree_sport_bridge:main",
             "publish_goal = go2_navigation.publish_goal:main",
+            "publish_cmd_vel = go2_navigation.publish_cmd_vel:main",
             "pcd_map_publisher = go2_navigation.pcd_map_publisher:main",
             "named_pose_gui = go2_navigation.named_pose_gui:main",
             "named_goal_gui = go2_navigation.named_goal_gui:main",

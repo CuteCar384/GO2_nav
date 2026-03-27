@@ -46,19 +46,13 @@ def generate_launch_description():
         description='Shared YAML parameter file for navigation nodes.')
     goal_topic_arg = DeclareLaunchArgument(
         'goal_topic', default_value='/goal_pose',
-        description='PoseStamped goal topic used by mapping-time navigation.')
+        description='PoseStamped goal topic published by RViz 2D Goal Pose.')
     path_topic_arg = DeclareLaunchArgument(
         'path_topic', default_value='/pct_path',
         description='nav_msgs/Path topic used by mapping-time local tracking.')
-    nav_cmd_topic_arg = DeclareLaunchArgument(
-        'nav_cmd_topic', default_value='/cmd_vel_nav',
-        description='Raw navigation velocity before obstacle filtering.')
     cmd_vel_topic_arg = DeclareLaunchArgument(
         'cmd_vel_topic', default_value='/cmd_vel',
-        description='Velocity topic shared between navigation and the Unitree bridge.')
-    height_map_topic_arg = DeclareLaunchArgument(
-        'height_map_topic', default_value='/utlidar/height_map_array',
-        description='Height-map topic used for terrain filtering during mapping.')
+        description='Velocity topic shared between the EGO tracker and the Unitree bridge.')
     sport_request_topic_arg = DeclareLaunchArgument(
         'sport_request_topic', default_value='/api/sport/request',
         description='Unitree sport request topic.')
@@ -99,36 +93,36 @@ def generate_launch_description():
         }]
     )
 
-    goal_controller_node = Node(
-        package='go2_navigation',
-        executable='simple_goal_controller',
-        name='go2_simple_goal_controller',
+    planner_node = Node(
+        package='ego_planner',
+        executable='ego_planner_node',
+        name='ego_planner_node',
         output='screen',
         parameters=[
             LaunchConfiguration('params_file'),
             {
-                'odom_topic': LaunchConfiguration('odom_topic'),
-                'goal_topic': LaunchConfiguration('goal_topic'),
-                'path_topic': LaunchConfiguration('path_topic'),
-                'cmd_vel_topic': LaunchConfiguration('nav_cmd_topic'),
+                'fsm/flight_type': 1,
             }
+        ],
+        remappings=[
+            ('odom_world', LaunchConfiguration('odom_topic')),
+            ('grid_map/odom', LaunchConfiguration('odom_topic')),
+            ('grid_map/cloud', LaunchConfiguration('cloud_topic')),
+            ('reference_path', LaunchConfiguration('path_topic')),
+            ('/move_base_simple/goal', LaunchConfiguration('goal_topic')),
         ]
     )
 
-    obstacle_filter_node = Node(
-        package='go2_navigation',
-        executable='dynamic_obstacle_filter',
-        name='go2_dynamic_obstacle_filter',
+    traj_server_node = Node(
+        package='ego_planner',
+        executable='go2_traj_server',
+        name='go2_traj_server',
         output='screen',
         parameters=[
             LaunchConfiguration('params_file'),
             {
-                'input_cmd_topic': LaunchConfiguration('nav_cmd_topic'),
-                'output_cmd_topic': LaunchConfiguration('cmd_vel_topic'),
                 'odom_topic': LaunchConfiguration('odom_topic'),
-                'range_info_topic': '/utlidar/range_info',
-                'cloud_topic': LaunchConfiguration('cloud_topic'),
-                'height_map_topic': LaunchConfiguration('height_map_topic'),
+                'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
             }
         ]
     )
@@ -186,16 +180,14 @@ def generate_launch_description():
         params_file_arg,
         goal_topic_arg,
         path_topic_arg,
-        nav_cmd_topic_arg,
         cmd_vel_topic_arg,
-        height_map_topic_arg,
         sport_request_topic_arg,
         named_goal_json_arg,
         named_goal_gui_arg,
         map_builder_node,
         named_pose_gui_node,
-        goal_controller_node,
-        obstacle_filter_node,
+        planner_node,
+        traj_server_node,
         sport_bridge_node,
         named_goal_gui_node,
         rviz_node,

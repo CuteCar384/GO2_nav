@@ -1,183 +1,95 @@
-# go2_simple_goal_controller:
-# 基于里程计的局部跟踪控制器，可优先跟踪 nav_msgs/Path 路径，也兼容单个 PoseStamped 目标点。
-go2_simple_goal_controller:
+# ego_planner_node:
+# 基于 EGO-Planner 的局部避障与重规划，输入为 odom、局部点云和 /pct_path。
+ego_planner_node:
   ros__parameters:
-    # 控制循环频率，单位 Hz。越高响应越快，但对传感器和计算稳定性要求也更高。
+    vis/frame_id: odom
+    fsm/flight_type: 3
+    fsm/thresh_replan_time: 0.35
+    fsm/thresh_no_replan_meter: 0.30
+    fsm/planning_horizon: 2.5
+    fsm/planning_horizen_time: 2.5
+    fsm/emergency_time: 1.0
+    fsm/realworld_experiment: false
+    fsm/fail_safe: true
+    fsm/waypoint_num: 0
+
+    grid_map/resolution: 0.10
+    grid_map/map_size_x: 20.0
+    grid_map/map_size_y: 20.0
+    grid_map/map_size_z: 1.6
+    grid_map/local_update_range_x: 4.0
+    grid_map/local_update_range_y: 4.0
+    grid_map/local_update_range_z: 1.0
+    grid_map/obstacles_inflation: 0.20
+    grid_map/local_map_margin: 10
+    grid_map/ground_height: -0.10
+    grid_map/ground_robot_mode: true
+    grid_map/ground_obstacle_min_height: 0.20
+    grid_map/ground_obstacle_max_height: 1.30
+    grid_map/self_clear_radius: 0.35
+    grid_map/fx: 387.2
+    grid_map/fy: 387.2
+    grid_map/cx: 321.0
+    grid_map/cy: 243.0
+    grid_map/use_depth_filter: false
+    grid_map/depth_filter_tolerance: 0.15
+    grid_map/depth_filter_maxdist: 5.0
+    grid_map/depth_filter_mindist: 0.2
+    grid_map/depth_filter_margin: 2
+    grid_map/k_depth_scaling_factor: 1000.0
+    grid_map/skip_pixel: 2
+    grid_map/p_hit: 0.70
+    grid_map/p_miss: 0.35
+    grid_map/p_min: 0.12
+    grid_map/p_max: 0.90
+    grid_map/p_occ: 0.80
+    grid_map/min_ray_length: 0.1
+    grid_map/max_ray_length: 4.5
+    grid_map/virtual_ceil_height: 1.20
+    grid_map/visualization_truncate_height: 1.20
+    grid_map/show_occ_time: false
+    grid_map/pose_type: 2
+    grid_map/frame_id: odom
+    grid_map/odom_depth_timeout: 1.0
+
+    manager/max_vel: 0.8
+    manager/max_acc: 1.5
+    manager/max_jerk: 4.0
+    manager/control_points_distance: 0.2
+    manager/feasibility_tolerance: 0.05
+    manager/planning_horizon: 2.5
+    manager/use_distinctive_trajs: false
+    manager/drone_id: -1
+
+    optimization/lambda_smooth: 1.0
+    optimization/lambda_collision: 0.6
+    optimization/lambda_feasibility: 0.1
+    optimization/lambda_fitness: 1.0
+    optimization/dist0: 0.35
+    optimization/swarm_clearance: 0.5
+    optimization/max_vel: 0.8
+    optimization/max_acc: 1.5
+
+    bspline/limit_vel: 0.8
+    bspline/limit_acc: 1.5
+    bspline/limit_ratio: 1.1
+
+    prediction/obj_num: 1
+    prediction/lambda: 1.0
+    prediction/predict_rate: 1.0
+
+go2_traj_server:
+  ros__parameters:
     control_rate_hz: 20.0
-    # 允许里程计数据“过期”的最长时间，单位秒。超过后控制器停止发运动命令。
-    stale_odometry_timeout: 0.5
-    # 判定“到达目标位置”的平面距离阈值，单位米。
-    position_tolerance: 0.25
-    # 到达目标位置后，判定“朝向也到位”的偏航误差阈值，单位弧度。
-    yaw_tolerance: 0.18
-    # 朝向目标的误差大于该值时优先原地转向，单位弧度。
-    rotate_in_place_threshold: 0.35
-    # 前向位置误差到线速度 x 的比例增益。
-    k_forward: 0.8
-    # 侧向位置误差到线速度 y 的比例增益；非全向模式下通常可设为 0。
-    k_lateral: 0.0
-    # 朝向目标的偏航误差到角速度 z 的比例增益。
-    k_heading: 1.4
-    # 已到达目标点后，最终对齐目标朝向时使用的偏航控制增益。
-    k_final_yaw: 1.6
-    # 非零移动时允许输出的最小线速度，单位 m/s，用来克服静摩擦。
+    time_forward: 0.30
     min_linear_speed: 0.30
-    # 线速度 x 上限，单位 m/s。
-    max_linear_x: 0.40
-    # 线速度 y 上限，单位 m/s。
-    max_linear_y: 0.25
-    # 合成平面线速度总幅值上限，单位 m/s。
-    max_linear_speed: 0.45
-    # 非零旋转时允许输出的最小角速度，单位 rad/s，用来避免小角速带不动机体。
+    max_linear_x: 0.30
+    max_linear_y: 0.00
     min_angular_speed: 0.30
-    # 角速度 z 上限，单位 rad/s。
-    max_angular_z: 0.80
-    # 是否允许倒车接近目标；false 时只允许向前走。
-    allow_reverse: true
-    # 是否允许横向平移；四足通常建议 false，避免生成不自然的侧移命令。
-    allow_lateral_motion: false
-    # 到达目标位置后是否继续对齐目标朝向；false 时到点即停，不再额外转向。
-    align_final_yaw: true
-    # 前进/倒车模式切换的滞回边界，单位弧度；越大越不容易在边界角度来回切换。
-    reverse_mode_switch_margin: 0.20
-    # 线速度斜坡上限，单位 m/s^2，用于减小起停和模式切换时的突变。
-    max_linear_accel: 0.80
-    # 角速度斜坡上限，单位 rad/s^2，用于减小转向突变。
-    max_angular_accel: 1.50
-    # 路径跟踪时选择前视目标点的距离，单位米；越大越平滑，越小越贴路径。
-    path_lookahead_distance: 0.45
-    # 当前机体和已跟踪路径偏离超过该值时，允许从整条新路径重新寻找最近点，单位米。
-    path_replan_reset_distance: 0.75
-
-# go2_dynamic_obstacle_filter:
-# 对导航控制器输出的原始速度进行二次约束，融合测距、点云和高程图做减速、停止和绕障。
-go2_dynamic_obstacle_filter:
-  ros__parameters:
-    # 滤波器主循环频率，单位 Hz。
-    control_rate_hz: 20.0
-    # 输入速度命令的超时时间，单位秒。超过后清零输出，防止旧命令持续执行。
-    cmd_timeout: 0.4
-    # 传感器数据的超时时间，单位秒。超过后认为传感器结果失效。
-    sensor_timeout: 0.4
-    # 传感器距离值的最大可信范围，单位米。超过该值会被截断。
-    max_sensor_distance: 5.0
-    # 当里程计或启用的传感器超时时，是否启用保护性停车。
-    fail_safe_stop_on_stale: true
-    # 是否启用 `/utlidar/range_info` 的前/左/右测距信息。
-    use_range_info: true
-    # 是否启用点云障碍物检测。
-    use_cloud: true
-    # 是否启用高程图地形检测。
-    use_height_map: false
-
-    # 前方距离小于该值时，若还在前进则进入强制停止/避障逻辑，单位米。
-    front_stop_distance: 0.20
-    # 前方距离小于该值时提前开始横向绕障，单位米。
-    front_avoid_distance: 0.50
-    # 前方距离进入该范围后开始按比例减速，单位米。
-    front_slow_distance: 0.75
-    # 倒车时，后向距离小于该值则强制停车，单位米。
-    rear_stop_distance: 0.22
-    # 倒车时，后向距离进入该范围后开始按比例减速，单位米。
-    rear_slow_distance: 0.55
-    # 左右侧安全边距，距离小于该值时禁止继续朝该侧平移或朝该侧转向，单位米。
-    side_stop_distance: 0.18
-    # 左右侧距离进入该范围后开始整体减速，单位米。
-    side_slow_distance: 0.32
-    # 减速时保留的最小速度比例，避免轻微障碍导致速度直接归零。
-    minimum_slowdown_ratio: 0.20
-
-    # 绕障时仍允许保留的前进速度，单位 m/s。
-    avoid_forward_speed: 0.10
-    # 绕障或侧向偏置时施加的横向速度基准值，单位 m/s。
-    avoid_lateral_speed: 0.18
-    # 绕障或侧向偏置时施加的转向角速度基准值，单位 rad/s。
-    avoid_turn_speed: 0.35
-    # 左右侧进入该距离后会持续施加“远离障碍物”的横向/转向斥力，单位米。
-    side_repulsion_distance: 0.45
-    # 侧向斥力对横移速度的增益。
-    lateral_repulsion_gain: 1.0
-    # 侧向斥力对转向速度的增益。
-    yaw_repulsion_gain: 1.0
-
-    # 经过滤波器后允许输出的最大前后速度，单位 m/s。
-    max_linear_x: 0.40
-    # 经过滤波器后允许输出的最大横移速度，单位 m/s。
-    max_linear_y: 0.25
-    # 经过滤波器后允许输出的最大转向速度，单位 rad/s。
-    max_angular_z: 0.80
-    # 判定线速度近似为 0 的死区，单位 m/s。
-    linear_deadband: 0.02
-    # 判定角速度近似为 0 的死区，单位 rad/s。
-    angular_deadband: 0.02
-
-    # 点云障碍物检测时，相对机体高度的最低阈值，低于该值的点忽略，单位米。
-    cloud_min_rel_z: -0.10
-    # 点云障碍物检测时，相对机体高度的最高阈值，高于该值的点忽略，单位米。
-    cloud_max_rel_z: 0.65
-    # 点云前向检测最远距离，单位米。
-    cloud_forward_limit: 2.50
-    # 点云后向保留距离，单位米；小于该值的点不参与前后左右窗口计算。
-    cloud_rear_limit: -0.20
-    # 点云横向检测总半宽，单位米。
-    cloud_side_limit: 1.20
-    # 前方障碍物窗口的半宽，单位米。
-    front_half_width: 0.35
-    # 后向障碍物窗口的半宽，单位米。
-    rear_half_width: 0.30
-    # 左右侧障碍物窗口前向起点，单位米。
-    side_forward_min: -0.10
-    # 左右侧障碍物窗口前向终点，单位米。
-    side_forward_max: 0.80
-    # 左右侧障碍物窗口靠近机体中心线的边界，单位米。
-    side_inner_offset: 0.05
-    # 左右侧障碍物窗口远离机体中心线的边界，单位米。
-    side_outer_offset: 0.65
-    # 障碍物距离变大时的释放平滑系数；越小越保守，越大恢复越快。
-    clearance_release_alpha: 0.18
-    # 选定绕障方向后的锁定时长，单位秒，避免左右来回抖动。
-    avoid_direction_lock_time: 0.8
-    # 左右两侧空隙差值小于该阈值时，优先保持上一次绕障方向，单位米。
-    side_selection_margin: 0.08
-
-    # 地形检测中，前方台阶高度达到该值视为硬停止，单位米。
-    terrain_hard_step_limit: 0.16
-    # 地形检测中，前方台阶高度超过该值开始进入软减速，单位米。
-    terrain_soft_step_limit: 0.10
-    # 地形检测中，前方落差达到该值视为硬停止，单位米。
-    terrain_hard_drop_limit: 0.16
-    # 地形检测中，前方落差超过该值开始进入软减速，单位米。
-    terrain_soft_drop_limit: 0.10
-    # 地形检测中，前方坡度达到该值视为硬停止，单位度。
-    terrain_hard_slope_deg: 40.0
-    # 地形检测中，前方坡度超过该值开始进入软减速，单位度。
-    terrain_soft_slope_deg: 30.0
-    # 前方地形评估窗口的近端，单位米。
-    terrain_forward_near: 0.30
-    # 前方地形评估窗口的远端，单位米。
-    terrain_forward_far: 1.00
-    # 前方地形评估窗口的半宽，单位米。
-    terrain_half_width: 0.25
-    # 左右侧地形评估窗口的前向最远距离，单位米。
-    terrain_side_forward_far: 0.80
-    # 左右侧地形评估窗口的内侧边界，单位米。
-    terrain_side_inner_offset: 0.20
-    # 左右侧地形评估窗口的外侧边界，单位米。
-    terrain_side_outer_offset: 0.50
-    # 机体基准高度采样窗口前向近端，单位米。
-    terrain_base_near: -0.20
-    # 机体基准高度采样窗口前向远端，单位米。
-    terrain_base_far: 0.20
-    # 机体基准高度采样窗口半宽，单位米。
-    terrain_base_half_width: 0.20
-    # 地形左右风险差异转换成横向偏置时的增益。
-    terrain_bias_gain: 1.0
-    # 左右地形风险分数差超过该阈值后，才开始主动偏向更安全的一侧。
-    terrain_bias_margin: 0.12
-    # 地形风险分数的最大截断值，避免异常值导致偏置过大。
-    terrain_score_clip: 3.0
-    # 触发 terrain_stop 后保持停车状态的最短时间，单位秒，用于抑制高程图边界抖动。
-    terrain_stop_hold_time: 0.5
+    max_angular_z: 0.30
+    heading_kp: 1.80
+    goal_tolerance: 0.22
+    stop_yaw_tolerance: 0.30
 
 # unitree_sport_bridge:
 # 将标准 Twist 速度转换成 Unitree Sport API 的运动请求。
@@ -194,13 +106,13 @@ unitree_sport_bridge:
     # 非零运动时允许发送的最小线速度，单位 m/s。
     min_linear_speed: 0.30
     # 最大发送前后速度，单位 m/s。
-    max_linear_x: 0.40
+    max_linear_x: 0.30
     # 最大发送横向速度，单位 m/s。
     max_linear_y: 0.25
     # 非零运动时允许发送的最小角速度，单位 rad/s。
     min_angular_speed: 0.30
     # 最大发送角速度，单位 rad/s。
-    max_angular_z: 0.80
+    max_angular_z: 0.30
 
 # go2_saved_map_publisher:
 # 将保存下来的 PCD 地图周期性发布为 PointCloud2，供 RViz 显示。

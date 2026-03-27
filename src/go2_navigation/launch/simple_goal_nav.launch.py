@@ -16,32 +16,22 @@ def generate_launch_description():
     odom_topic = DeclareLaunchArgument(
         "odom_topic",
         default_value="/utlidar/robot_odom",
-        description="Odometry topic used by the simple goal controller.",
-    )
-    goal_topic = DeclareLaunchArgument(
-        "goal_topic",
-        default_value="/goal_pose",
-        description="Optional PoseStamped single-goal topic.",
+        description="Odometry topic used by the EGO local planner.",
     )
     path_topic = DeclareLaunchArgument(
         "path_topic",
         default_value="/pct_path",
-        description="nav_msgs/Path topic used for local path tracking.",
+        description="nav_msgs/Path topic used as the reference path for EGO planning.",
     )
-    nav_cmd_topic = DeclareLaunchArgument(
-        "nav_cmd_topic",
-        default_value="/cmd_vel_nav",
-        description="Raw navigation velocity before obstacle filtering.",
+    cloud_topic = DeclareLaunchArgument(
+        "cloud_topic",
+        default_value="/utlidar/cloud_deskewed",
+        description="PointCloud2 topic used for local occupancy updates.",
     )
     cmd_vel_topic = DeclareLaunchArgument(
         "cmd_vel_topic",
         default_value="/cmd_vel",
-        description="Velocity topic shared between the goal controller and the Unitree bridge.",
-    )
-    height_map_topic = DeclareLaunchArgument(
-        "height_map_topic",
-        default_value="/utlidar/height_map_array",
-        description="Height-map topic used for terrain filtering.",
+        description="Velocity topic shared between the trajectory tracker and the Unitree bridge.",
     )
     sport_request_topic = DeclareLaunchArgument(
         "sport_request_topic",
@@ -49,37 +39,36 @@ def generate_launch_description():
         description="Unitree sport request topic.",
     )
 
-    goal_controller = Node(
-        package="go2_navigation",
-        executable="simple_goal_controller",
-        name="go2_simple_goal_controller",
+    planner_node = Node(
+        package="ego_planner",
+        executable="ego_planner_node",
+        name="ego_planner_node",
         output="screen",
         parameters=[
             LaunchConfiguration("params_file"),
-            {
-                "odom_topic": LaunchConfiguration("odom_topic"),
-                "goal_topic": LaunchConfiguration("goal_topic"),
-                "path_topic": LaunchConfiguration("path_topic"),
-                "cmd_vel_topic": LaunchConfiguration("nav_cmd_topic"),
-            }
+        ],
+        remappings=[
+            ("odom_world", LaunchConfiguration("odom_topic")),
+            ("grid_map/odom", LaunchConfiguration("odom_topic")),
+            ("grid_map/cloud", LaunchConfiguration("cloud_topic")),
+            ("reference_path", LaunchConfiguration("path_topic")),
         ],
     )
 
-    obstacle_filter = Node(
-        package="go2_navigation",
-        executable="dynamic_obstacle_filter",
-        name="go2_dynamic_obstacle_filter",
+    traj_server = Node(
+        package="ego_planner",
+        executable="go2_traj_server",
+        name="go2_traj_server",
         output="screen",
         parameters=[
             LaunchConfiguration("params_file"),
             {
-                "input_cmd_topic": LaunchConfiguration("nav_cmd_topic"),
-                "output_cmd_topic": LaunchConfiguration("cmd_vel_topic"),
                 "odom_topic": LaunchConfiguration("odom_topic"),
-                "range_info_topic": "/utlidar/range_info",
-                "cloud_topic": "/utlidar/cloud_deskewed",
-                "height_map_topic": LaunchConfiguration("height_map_topic"),
+                "cmd_vel_topic": LaunchConfiguration("cmd_vel_topic"),
             }
+        ],
+        remappings=[
+            ("planning/bspline", "planning/bspline"),
         ],
     )
 
@@ -101,14 +90,12 @@ def generate_launch_description():
         [
             params_file,
             odom_topic,
-            goal_topic,
             path_topic,
-            nav_cmd_topic,
+            cloud_topic,
             cmd_vel_topic,
-            height_map_topic,
             sport_request_topic,
-            goal_controller,
-            obstacle_filter,
+            planner_node,
+            traj_server,
             sport_bridge,
         ]
     )
