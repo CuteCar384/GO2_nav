@@ -58,6 +58,10 @@ public:
     min_angular_speed_ = this->declare_parameter<double>("min_angular_speed", 0.0);
     max_angular_z_ = this->declare_parameter<double>("max_angular_z", 1.0);
     heading_kp_ = this->declare_parameter<double>("heading_kp", 1.5);
+    allow_reverse_motion_ =
+        this->declare_parameter<bool>("allow_reverse_motion", false);
+    reverse_heading_tolerance_ =
+        this->declare_parameter<double>("reverse_heading_tolerance", 1.2);
     require_initial_heading_alignment_ =
         this->declare_parameter<bool>("require_initial_heading_alignment", false);
     initial_heading_tolerance_ =
@@ -331,6 +335,37 @@ private:
     cmd.linear.y = -sin_yaw * sample.velocity_world.x() + cos_yaw * sample.velocity_world.y();
     cmd.angular.z = stabilizedAngularCommand(sample.heading_error);
 
+    if (!allow_reverse_motion_ && cmd.linear.x < 0.0)
+    {
+      cmd.linear.x = 0.0;
+      cmd.linear.y = 0.0;
+
+      // If the trajectory points behind the robot, rotate until the heading error
+      // returns to the front hemisphere instead of commanding backward motion.
+      if (std::abs(sample.heading_error) > reverse_heading_tolerance_)
+      {
+        cmd.angular.z = stabilizedAngularCommand(sample.heading_error);
+      }
+
+      const std::array<double, 3> reverse_block_key{
+          0.0,
+          0.0,
+          std::round(cmd.angular.z * 1000.0) / 1000.0};
+      if (!last_logged_command_.has_value() || last_logged_command_.value() != reverse_block_key)
+      {
+        RCLCPP_WARN(
+            this->get_logger(),
+            "Reverse motion blocked: projected vx=%.3f, heading_err=%.3f. Holding linear motion until path returns to the front hemisphere.",
+            cos_yaw * sample.velocity_world.x() + sin_yaw * sample.velocity_world.y(),
+            sample.heading_error);
+        last_logged_command_ = reverse_block_key;
+      }
+
+      last_published_wz_ = cmd.angular.z;
+      cmd_pub_->publish(cmd);
+      return;
+    }
+
     if (pending_initial_alignment_)
     {
       const Eigen::Vector3d goal_heading_dir = current_goal_position_ - odom_pos;
@@ -441,6 +476,8 @@ private:
   double min_angular_speed_{0.0};
   double max_angular_z_{1.0};
   double heading_kp_{1.5};
+  bool allow_reverse_motion_{false};
+  double reverse_heading_tolerance_{1.2};
   bool require_initial_heading_alignment_{false};
   bool pending_initial_alignment_{false};
   bool rotating_for_initial_alignment_{false};

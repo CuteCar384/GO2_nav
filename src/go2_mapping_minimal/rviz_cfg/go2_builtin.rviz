@@ -34,6 +34,30 @@ Visualization Manager:
         Value: /go2_built_map
       Use Fixed Frame: true
       Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 80; 80
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: LocalOccupancy
+      Size (Pixels): 3
+      Style: Flat Squares
+      Topic:
+        Value: /grid_map/occupancy
+      Use Fixed Frame: true
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/PointCloud2
+      Color: 80; 220; 120
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: InflatedOccupancy
+      Size (Pixels): 3
+      Style: Flat Squares
+      Topic:
+        Value: /grid_map/occupancy_inflate
+      Use Fixed Frame: true
+      Value: true
     - Class: rviz_default_plugins/Path
       Enabled: true
       Name: RobotPath

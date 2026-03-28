@@ -336,6 +336,12 @@ src/go2_navigation/config/go2_navigation.yaml
 - `ego_planner_node` 下的 `optimization/*`
 - `go2_traj_server` 下的速度与朝向跟踪参数
 
+完整参数说明见：
+
+```text
+NAVIGATION_PARAMETERS.md
+```
+
 ## 4. MCP 点位服务
 
 保存点位和发送点位现在也可以通过 MCP server 调用，不必依赖图形界面。
@@ -414,6 +420,7 @@ src/go2_camera_bridge/config/go2_camera_bridge.yaml
 ## 常用文件
 
 - 导航调研与边界说明：`NAVIGATION_RESEARCH.md`
+- 导航参数详解：`NAVIGATION_PARAMETERS.md`
 - 相机桥接简记：`机器狗摄像头ROS2桥接简记.md`
 - 导航参数：`src/go2_navigation/config/go2_navigation.yaml`
 - 相机参数：`src/go2_camera_bridge/config/go2_camera_bridge.yaml`
