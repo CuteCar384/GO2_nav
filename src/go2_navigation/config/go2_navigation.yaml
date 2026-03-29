@@ -2,101 +2,192 @@
 # 基于 EGO-Planner 的局部避障与重规划，输入为 odom、局部点云和 /pct_path。
 ego_planner_node:
   ros__parameters:
+    # 可视化输出采用的坐标系。
     vis/frame_id: odom
+    # EGO-Planner 运行模式。这里使用参考路径驱动的地面机器人局部规划模式。
     fsm/flight_type: 3
+    # 距离上次规划超过该时间后，允许重新规划，单位秒。
     fsm/thresh_replan_time: 0.35
+    # 若当前位置与当前轨迹偏差小于该值，则尽量不重复规划，单位米。
     fsm/thresh_no_replan_meter: 0.30
+    # 空间上的局部规划前视距离，单位米。
     fsm/planning_horizon: 2.5
+    # 时间上的局部规划前视窗口，单位秒。
     fsm/planning_horizen_time: 2.5
+    # 检测到风险时预留的应急反应时间，单位秒。
     fsm/emergency_time: 1.0
+    # 是否启用原始项目中的实机实验分支逻辑。当前关闭。
     fsm/realworld_experiment: false
+    # 打开失效保护，规划失败或风险过大时更保守。
     fsm/fail_safe: true
+    # 预设 waypoint 数量。当前链路不走预设多点任务，因此为 0。
     fsm/waypoint_num: 0
 
-    grid_map/resolution: 0.10
+    # 局部占据地图体素分辨率，越小越精细，但计算量越大，单位米。
+    grid_map/resolution: 0.05
+    # 局部地图 X 方向尺寸，单位米。
     grid_map/map_size_x: 20.0
+    # 局部地图 Y 方向尺寸，单位米。
     grid_map/map_size_y: 20.0
+    # 局部地图 Z 方向尺寸，单位米。
     grid_map/map_size_z: 1.6
+    # 机器人周围实时更新地图的 X 半范围，单位米。
     grid_map/local_update_range_x: 4.0
+    # 机器人周围实时更新地图的 Y 半范围，单位米。
     grid_map/local_update_range_y: 4.0
+    # 机器人周围实时更新地图的 Z 半范围，单位米。
     grid_map/local_update_range_z: 1.0
-    grid_map/obstacles_inflation: 0.25
+    # 障碍膨胀半径。越大越保守，越不容易贴边通过，单位米。
+    grid_map/obstacles_inflation: 0.20
+    # 局部地图边界额外保留的体素边距。
     grid_map/local_map_margin: 10
+    # 地面基准高度，单位米。
     grid_map/ground_height: -0.10
+    # 启用地面机器人模式，按平面避障思路处理障碍。
     grid_map/ground_robot_mode: true
+    # 低于该高度的点不计为障碍，可过滤贴地噪声，单位米。
     grid_map/ground_obstacle_min_height: 0.20
+    # 高于该高度的点不计为地面障碍，单位米。
     grid_map/ground_obstacle_max_height: 1.30
-    grid_map/self_clear_radius: 0.40
+    # 机器人自身附近的点云清除半径，避免把机身或腿部回波当障碍，单位米。
+    grid_map/self_clear_radius: 0.30
+    # 深度相机模型内参 fx。当前主要使用点云输入，通常不是主要调参项。
     grid_map/fx: 387.2
+    # 深度相机模型内参 fy。
     grid_map/fy: 387.2
+    # 深度相机模型内参 cx。
     grid_map/cx: 321.0
+    # 深度相机模型内参 cy。
     grid_map/cy: 243.0
+    # 是否启用深度图滤波。当前主要走点云，因此关闭。
     grid_map/use_depth_filter: false
+    # 深度滤波容差，单位米。
     grid_map/depth_filter_tolerance: 0.15
+    # 深度滤波最大距离，单位米。
     grid_map/depth_filter_maxdist: 5.0
+    # 深度滤波最小距离，单位米。
     grid_map/depth_filter_mindist: 0.2
+    # 深度图边缘滤波的像素余量。
     grid_map/depth_filter_margin: 2
+    # 深度值缩放系数。
     grid_map/k_depth_scaling_factor: 1000.0
+    # 深度图采样步长，值越大采样越稀疏。
     grid_map/skip_pixel: 2
+    # 射线命中障碍时的占据概率更新值。
     grid_map/p_hit: 0.70
+    # 射线穿过空闲空间时的占据概率更新值。
     grid_map/p_miss: 0.35
+    # 占据概率下限。
     grid_map/p_min: 0.12
+    # 占据概率上限。
     grid_map/p_max: 0.90
+    # 判定为占据障碍的概率阈值。
     grid_map/p_occ: 0.80
+    # 射线投射最短长度，单位米。
     grid_map/min_ray_length: 0.1
+    # 射线投射最长长度，单位米。
     grid_map/max_ray_length: 4.5
+    # 虚拟天花板高度，限制地图有效高度，单位米。
     grid_map/virtual_ceil_height: 1.20
+    # RViz 可视化时的高度截断值，单位米。
     grid_map/visualization_truncate_height: 1.20
+    # 是否打印占据更新耗时。
     grid_map/show_occ_time: false
+    # 位姿输入类型。2 表示使用 Odometry。
     grid_map/pose_type: 2
+    # 局部地图坐标系。
     grid_map/frame_id: odom
+    # 里程计与点云/深度输入的超时时间，单位秒。
     grid_map/odom_depth_timeout: 1.0
 
+    # 规划器内部允许的最大速度，单位 m/s。后级还会再次限幅。
     manager/max_vel: 0.8
+    # 规划器内部允许的最大加速度，单位 m/s^2。
     manager/max_acc: 1.5
+    # 规划器内部允许的最大加加速度。
     manager/max_jerk: 4.0
-    manager/control_points_distance: 0.2
+    # B-spline 控制点间距，越小轨迹越灵活，单位米。
+    manager/control_points_distance: 0.1
+    # 动力学可行性容差。
     manager/feasibility_tolerance: 0.05
+    # 规划管理器使用的局部规划视野，单位米。
     manager/planning_horizon: 2.5
+    # 是否启用区分式轨迹集合。当前关闭。
     manager/use_distinctive_trajs: false
+    # 原始项目里的多机编号。这里为单机地面机器人，占位为 -1。
     manager/drone_id: -1
 
-    optimization/lambda_smooth: 1.0
-    optimization/lambda_collision: 0.6
+    # 平滑项权重，越大轨迹越平顺。
+    optimization/lambda_smooth: 2.0
+    # 碰撞代价权重，越大越倾向于远离障碍。
+    optimization/lambda_collision: 2.0
+    # 动力学可行性代价权重。
     optimization/lambda_feasibility: 0.1
+    # 参考路径贴合项权重，越大越不愿偏离 /pct_path。
     optimization/lambda_fitness: 1.0
-    optimization/dist0: 0.40
+    # 期望与障碍保持的安全距离，单位米。
+    optimization/dist0: 0.30
+    # 原始多机避碰安全距离。单机场景里基本不敏感，单位米。
     optimization/swarm_clearance: 0.5
+    # 优化器内部速度约束，单位 m/s。
     optimization/max_vel: 0.8
+    # 优化器内部加速度约束，单位 m/s^2。
     optimization/max_acc: 1.5
 
+    # 输出 B-spline 的速度上限，单位 m/s。
     bspline/limit_vel: 0.8
+    # 输出 B-spline 的加速度上限，单位 m/s^2。
     bspline/limit_acc: 1.5
+    # 对速度/加速度上限的放宽比例。
     bspline/limit_ratio: 1.1
 
-    prediction/obj_num: 1
-    prediction/lambda: 1.0
-    prediction/predict_rate: 1.0
+    # 动态障碍预测目标数量上限。
+    prediction/obj_num: 5
+    # 预测相关代价权重。
+    prediction/lambda: 2.0
+    # 预测更新频率系数。
+    prediction/predict_rate: 2.0
 
+# go2_traj_server:
+# 将 EGO-Planner 输出的 B-spline 轨迹转换为机体系 /cmd_vel。
 go2_traj_server:
   ros__parameters:
+    # 控制器输出 cmd_vel 的频率，单位 Hz。
     control_rate_hz: 20.0
+    # 计算目标朝向时的前视时间。越大越看重前方轨迹方向，单位秒。
     time_forward: 0.30
+    # 新目标或新轨迹到来后，是否先原地对准朝向再前进。
     require_initial_heading_alignment: true
+    # 初始对准允许的朝向误差，单位 rad。
     initial_heading_tolerance: 0.35
+    # 若新目标与旧目标相差超过该值，则重新进入初始对准，单位米。
     initial_alignment_goal_change_threshold: 0.20
+    # 朝向误差死区。小于该值时不再输出角速度，单位 rad。
     heading_deadband: 0.12
+    # 小角度范围内抑制角速度正负来回翻转，单位 rad。
     heading_sign_flip_tolerance: 0.20
+    # 非零线速度的最小值，避免速度太小机器人走不起来，单位 m/s。
     min_linear_speed: 0.30
+    # 最大发送前向线速度，单位 m/s。
     max_linear_x: 0.30
+    # 最大发送横向线速度。这里为 0，表示不允许横移，单位 m/s。
     max_linear_y: 0.00
+    # 非零角速度的最小值，避免小角速度时转不起来，单位 rad/s。
     min_angular_speed: 0.80
+    # 最大发送角速度，单位 rad/s。
     max_angular_z: 0.80
+    # 朝向误差比例增益，越大转向越积极。
     heading_kp: 1.80
+    # 是否允许倒车。当前关闭。
     allow_reverse_motion: false
+    # 禁止倒车时，允许继续通过转向修正的误差范围，单位 rad。
     reverse_heading_tolerance: 1.20
-    goal_tolerance: 0.22
-    stop_yaw_tolerance: 0.30
+    # 平面位置到达阈值，单位米。
+    goal_tolerance: 0.05
+    # 进入最终朝向对齐模式的距离阈值，单位米。进入后停止最终逼近，只做原地转向。
+    final_alignment_distance: 0.08
+    # 到达目标时允许的最终朝向误差，单位 rad。
+    stop_yaw_tolerance: 0.05
 
 # unitree_sport_bridge:
 # 将标准 Twist 速度转换成 Unitree Sport API 的运动请求。

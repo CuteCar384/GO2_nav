@@ -131,7 +131,6 @@ namespace ego_planner
           {
             this->referencePathCallback(msg);
           });
-      RCLCPP_INFO(node_->get_logger(), "Waiting for nav_msgs/Path on reference_path");
     }
     else if (target_type_ == TARGET_TYPE::PRESET_TARGET)
     {

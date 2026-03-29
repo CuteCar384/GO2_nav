@@ -76,6 +76,9 @@ public:
         this->declare_parameter<double>("heading_sign_flip_tolerance", 0.20);
     goal_tolerance_ = this->declare_parameter<double>("goal_tolerance", 0.18);
     stop_yaw_tolerance_ = this->declare_parameter<double>("stop_yaw_tolerance", 0.2);
+    final_yaw_offset_ = this->declare_parameter<double>("final_yaw_offset", 0.0);
+    final_alignment_distance_ =
+        this->declare_parameter<double>("final_alignment_distance", 0.08);
 
     cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic, 10);
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
@@ -105,6 +108,13 @@ private:
         msg->pose.position.x,
         msg->pose.position.y,
         msg->pose.position.z);
+    latest_goal_yaw_ = yawFromQuaternion(
+        msg->pose.orientation.x,
+        msg->pose.orientation.y,
+        msg->pose.orientation.z,
+        msg->pose.orientation.w);
+    latest_goal_yaw_ = normalizeAngle(latest_goal_yaw_.value() + final_yaw_offset_);
+    rotating_to_final_goal_yaw_ = false;
 
     if (require_initial_heading_alignment_)
     {
@@ -113,10 +123,12 @@ private:
       last_logged_command_ = std::nullopt;
       RCLCPP_INFO(
           this->get_logger(),
-          "Received goal point for heading alignment: x=%.3f y=%.3f z=%.3f",
+          "Received goal point for heading alignment: x=%.3f y=%.3f z=%.3f yaw=%.3f (offset=%.3f)",
           msg->pose.position.x,
           msg->pose.position.y,
-          msg->pose.position.z);
+          msg->pose.position.z,
+          latest_goal_yaw_.value(),
+          final_yaw_offset_);
     }
   }
 
@@ -180,6 +192,7 @@ private:
     cmd_pub_->publish(geometry_msgs::msg::Twist());
     last_logged_command_ = std::nullopt;
     rotating_for_initial_alignment_ = false;
+    rotating_to_final_goal_yaw_ = false;
   }
 
   struct TrackingSample
@@ -237,6 +250,47 @@ private:
     }
 
     return wz;
+  }
+
+  double finalAlignmentAngularCommand(const double heading_error)
+  {
+    double wz = clamp(heading_kp_ * heading_error, -max_angular_z_, max_angular_z_);
+    if (std::abs(wz) > 1e-6 && std::abs(wz) < min_angular_speed_)
+    {
+      wz = std::copysign(min_angular_speed_, wz);
+    }
+    return wz;
+  }
+
+  geometry_msgs::msg::Twist buildFinalApproachCommand(
+      const Eigen::Vector3d &odom_pos,
+      const double yaw,
+      const double distance_to_goal)
+  {
+    geometry_msgs::msg::Twist cmd;
+    if (!latest_goal_point_.has_value())
+    {
+      return cmd;
+    }
+
+    const Eigen::Vector3d goal_dir = latest_goal_point_.value() - odom_pos;
+    const double goal_yaw =
+        goal_dir.head<2>().norm() > 1e-6 ? std::atan2(goal_dir.y(), goal_dir.x()) : yaw;
+    const double heading_error = normalizeAngle(goal_yaw - yaw);
+
+    cmd.angular.z = stabilizedAngularCommand(heading_error);
+
+    if (std::abs(heading_error) <= initial_heading_tolerance_)
+    {
+      double vx = std::min(max_linear_x_, std::max(distance_to_goal * 1.5, 0.0));
+      if (vx > 1e-6 && distance_to_goal > final_alignment_distance_ && vx < min_linear_speed_)
+      {
+        vx = min_linear_speed_;
+      }
+      cmd.linear.x = vx;
+    }
+
+    return cmd;
   }
 
   void publishCommand()
@@ -335,7 +389,9 @@ private:
     cmd.linear.y = -sin_yaw * sample.velocity_world.x() + cos_yaw * sample.velocity_world.y();
     cmd.angular.z = stabilizedAngularCommand(sample.heading_error);
 
-    if (!allow_reverse_motion_ && cmd.linear.x < 0.0)
+    const bool trajectory_finished = t_cur >= traj_duration_ - 1e-2;
+
+    if (!trajectory_finished && !allow_reverse_motion_ && cmd.linear.x < 0.0)
     {
       cmd.linear.x = 0.0;
       cmd.linear.y = 0.0;
@@ -412,14 +468,101 @@ private:
           "Initial heading aligned with goal point, switching from rotate-in-place to forward tracking.");
     }
 
-    const double distance_to_goal = sample.tracking_error;
-    const bool trajectory_finished = t_cur >= traj_duration_ - 1e-2;
-    if (trajectory_finished && distance_to_goal < goal_tolerance_ &&
-        std::abs(sample.heading_error) < stop_yaw_tolerance_)
+    double distance_to_goal = sample.tracking_error;
+    if (latest_goal_point_.has_value())
     {
+      distance_to_goal =
+          (latest_goal_point_.value() - odom_pos).head<2>().norm();
+    }
+    const double final_alignment_distance =
+        std::max(goal_tolerance_, final_alignment_distance_);
+    if (trajectory_finished && latest_goal_point_.has_value() &&
+        distance_to_goal > final_alignment_distance)
+    {
+      geometry_msgs::msg::Twist final_approach_cmd =
+          buildFinalApproachCommand(odom_pos, yaw, distance_to_goal);
+
+      const std::array<double, 3> final_approach_key{
+          std::round(final_approach_cmd.linear.x * 1000.0) / 1000.0,
+          std::round(final_approach_cmd.linear.y * 1000.0) / 1000.0,
+          std::round(final_approach_cmd.angular.z * 1000.0) / 1000.0};
+      if (!last_logged_command_.has_value() ||
+          last_logged_command_.value() != final_approach_key)
+      {
+        const Eigen::Vector3d goal_dir = latest_goal_point_.value() - odom_pos;
+        const double goal_yaw =
+            goal_dir.head<2>().norm() > 1e-6 ? std::atan2(goal_dir.y(), goal_dir.x()) : yaw;
+        const double heading_error = normalizeAngle(goal_yaw - yaw);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "FINAL APPROACH MODE: trajectory ended before RViz goal was reached. goal_dist=%.3f m, heading_err=%.3f rad, cmd_vx=%.3f, cmd_wz=%.3f, final_align_dist=%.3f",
+            distance_to_goal,
+            heading_error,
+            final_approach_cmd.linear.x,
+            final_approach_cmd.angular.z,
+            final_alignment_distance);
+        last_logged_command_ = final_approach_key;
+      }
+
+      last_published_wz_ = final_approach_cmd.angular.z;
+      cmd_pub_->publish(final_approach_cmd);
+      return;
+    }
+
+    if (trajectory_finished && distance_to_goal <= final_alignment_distance)
+    {
+      if (latest_goal_yaw_.has_value())
+      {
+        const double final_goal_yaw_error = normalizeAngle(latest_goal_yaw_.value() - yaw);
+        if (std::abs(final_goal_yaw_error) > stop_yaw_tolerance_)
+        {
+          geometry_msgs::msg::Twist rotate_cmd;
+          rotate_cmd.angular.z = finalAlignmentAngularCommand(final_goal_yaw_error);
+
+          const std::array<double, 3> final_align_command_key{
+              0.0,
+              0.0,
+              std::round(rotate_cmd.angular.z * 1000.0) / 1000.0};
+          if (!rotating_to_final_goal_yaw_ ||
+              !last_logged_command_.has_value() ||
+              last_logged_command_.value() != final_align_command_key)
+          {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "FINAL ALIGN MODE: RViz goal position reached, rotating to target yaw. goal_dist=%.3f m, current_yaw=%.3f rad, target_yaw=%.3f rad, yaw_err=%.3f rad, tolerance=%.3f rad",
+                distance_to_goal,
+                yaw,
+                latest_goal_yaw_.value(),
+                final_goal_yaw_error,
+                stop_yaw_tolerance_);
+            last_logged_command_ = final_align_command_key;
+            rotating_to_final_goal_yaw_ = true;
+          }
+
+          last_published_wz_ = rotate_cmd.angular.z;
+          cmd_pub_->publish(rotate_cmd);
+          return;
+        }
+      }
+
       publishZero();
       active_traj_ = false;
-      RCLCPP_INFO(this->get_logger(), "Trajectory finished and goal tolerance satisfied, stopping.");
+      rotating_to_final_goal_yaw_ = false;
+      if (latest_goal_yaw_.has_value())
+      {
+        const double final_goal_yaw_error = normalizeAngle(latest_goal_yaw_.value() - yaw);
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Trajectory finished, goal tolerance satisfied, and final yaw aligned. distance=%.3f, current_yaw=%.3f, target_yaw=%.3f, yaw_err=%.3f",
+            distance_to_goal,
+            yaw,
+            latest_goal_yaw_.value(),
+            final_goal_yaw_error);
+      }
+      else
+      {
+        RCLCPP_INFO(this->get_logger(), "Trajectory finished and goal tolerance satisfied, stopping.");
+      }
       return;
     }
 
@@ -483,6 +626,7 @@ private:
   bool rotating_for_initial_alignment_{false};
   bool pending_goal_point_alignment_{false};
   bool rotating_to_goal_point_{false};
+  bool rotating_to_final_goal_yaw_{false};
   double initial_heading_tolerance_{0.35};
   double alignment_goal_min_distance_{0.20};
   double initial_alignment_goal_change_threshold_{0.20};
@@ -490,9 +634,12 @@ private:
   double heading_sign_flip_tolerance_{0.20};
   double goal_tolerance_{0.18};
   double stop_yaw_tolerance_{0.2};
+  double final_yaw_offset_{0.0};
+  double final_alignment_distance_{0.08};
   double last_published_wz_{0.0};
   std::optional<std::array<double, 3>> last_logged_command_;
   std::optional<Eigen::Vector3d> latest_goal_point_;
+  std::optional<double> latest_goal_yaw_;
   std::optional<Eigen::Vector3d> last_goal_position_;
   Eigen::Vector3d current_goal_position_{Eigen::Vector3d::Zero()};
 };
