@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gitnexus analyze:*)",
+      "Bash(/home/huang/.local/bin/gitnexus analyze:*)"
+    ]
+  }
+}

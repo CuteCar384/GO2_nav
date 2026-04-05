@@ -30,13 +30,13 @@ ego_planner_node:
     # 局部地图 Y 方向尺寸，单位米。
     grid_map/map_size_y: 20.0
     # 局部地图 Z 方向尺寸，单位米。
-    grid_map/map_size_z: 1.6
+    grid_map/map_size_z: 6.0
     # 机器人周围实时更新地图的 X 半范围，单位米。
     grid_map/local_update_range_x: 4.0
     # 机器人周围实时更新地图的 Y 半范围，单位米。
     grid_map/local_update_range_y: 4.0
     # 机器人周围实时更新地图的 Z 半范围，单位米。
-    grid_map/local_update_range_z: 1.0
+    grid_map/local_update_range_z: 3.0
     # 障碍膨胀半径。越大越保守，越不容易贴边通过，单位米。
     grid_map/obstacles_inflation: 0.20
     # 局部地图边界额外保留的体素边距。
@@ -48,7 +48,7 @@ ego_planner_node:
     # 低于该高度的点不计为障碍，可过滤贴地噪声，单位米。
     grid_map/ground_obstacle_min_height: 0.20
     # 高于该高度的点不计为地面障碍，单位米。
-    grid_map/ground_obstacle_max_height: 1.30
+    grid_map/ground_obstacle_max_height: 2.50
     # 机器人自身附近的点云清除半径，避免把机身或腿部回波当障碍，单位米。
     grid_map/self_clear_radius: 0.30
     # 深度相机模型内参 fx。当前主要使用点云输入，通常不是主要调参项。
@@ -88,9 +88,9 @@ ego_planner_node:
     # 射线投射最长长度，单位米。
     grid_map/max_ray_length: 4.5
     # 虚拟天花板高度，限制地图有效高度，单位米。
-    grid_map/virtual_ceil_height: 1.20
+    grid_map/virtual_ceil_height: 5.50
     # RViz 可视化时的高度截断值，单位米。
-    grid_map/visualization_truncate_height: 1.20
+    grid_map/visualization_truncate_height: 5.50
     # 是否打印占据更新耗时。
     grid_map/show_occ_time: false
     # 位姿输入类型。2 表示使用 Odometry。

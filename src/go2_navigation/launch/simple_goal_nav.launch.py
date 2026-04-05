@@ -86,6 +86,18 @@ def generate_launch_description():
         ],
     )
 
+    gait_init_node = Node(
+        package="go2_navigation",
+        executable="gait_init_node",
+        name="gait_init_node",
+        output="screen",
+        parameters=[
+            {
+                "sport_request_topic": LaunchConfiguration("sport_request_topic"),
+            }
+        ],
+    )
+
     return LaunchDescription(
         [
             params_file,
@@ -94,6 +106,7 @@ def generate_launch_description():
             cloud_topic,
             cmd_vel_topic,
             sport_request_topic,
+            gait_init_node,
             planner_node,
             traj_server,
             sport_bridge,

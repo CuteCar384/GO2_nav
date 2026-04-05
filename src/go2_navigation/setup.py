@@ -41,6 +41,7 @@ setup(
             "named_pose_gui = go2_navigation.named_pose_gui:main",
             "named_goal_gui = go2_navigation.named_goal_gui:main",
             "navigation_mcp_server = go2_navigation.navigation_mcp_server:main",
+            "gait_init_node = go2_navigation.gait_init_node:main",
         ],
     },
 )

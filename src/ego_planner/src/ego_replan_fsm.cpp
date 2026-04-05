@@ -286,11 +286,11 @@ namespace ego_planner
     for (size_t i = 0; i < msg->poses.size(); i += stride)
     {
       const auto &pose = msg->poses[i].pose.position;
-      waypoints.emplace_back(pose.x, pose.y, odom_pos_(2));
+      waypoints.emplace_back(pose.x, pose.y, pose.z);
     }
 
     const auto &last_pose = msg->poses.back().pose.position;
-    Eigen::Vector3d final_point(last_pose.x, last_pose.y, odom_pos_(2));
+    Eigen::Vector3d final_point(last_pose.x, last_pose.y, last_pose.z);
     if (waypoints.empty() || (waypoints.back() - final_point).norm() > 1e-3)
     {
       waypoints.push_back(final_point);

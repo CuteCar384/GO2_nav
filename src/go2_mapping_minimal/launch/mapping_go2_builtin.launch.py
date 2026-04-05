@@ -141,6 +141,18 @@ def generate_launch_description():
         ]
     )
 
+    gait_init_node = Node(
+        package='go2_navigation',
+        executable='gait_init_node',
+        name='gait_init_node',
+        output='screen',
+        parameters=[
+            {
+                'sport_request_topic': LaunchConfiguration('sport_request_topic'),
+            }
+        ]
+    )
+
     named_goal_gui_node = Node(
         package='go2_navigation',
         executable='named_goal_gui',
@@ -189,6 +201,7 @@ def generate_launch_description():
         planner_node,
         traj_server_node,
         sport_bridge_node,
+        gait_init_node,
         named_goal_gui_node,
         rviz_node,
     ])
