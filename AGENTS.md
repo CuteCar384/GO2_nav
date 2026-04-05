@@ -1,9 +1,9 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **xxx** (1426 symbols, 3260 relationships, 122 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **xxx** (1459 symbols, 3304 relationships, 124 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, prefer running `gitnexus analyze` (or `/home/huang/.local/bin/gitnexus analyze`) in terminal first. Use `npx gitnexus ...` only as a fallback.
+> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
 ## Always Do
 
@@ -74,32 +74,14 @@ Before completing any code modification task, verify:
 After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
 
 ```bash
-gitnexus analyze
+npx gitnexus analyze
 ```
 
 If the index previously included embeddings, preserve them by adding `--embeddings`:
 
 ```bash
-gitnexus analyze --embeddings
+npx gitnexus analyze --embeddings
 ```
-
-## Codex Stability Note
-
-If Codex cannot see the GitNexus MCP server, repair setup first:
-
-```bash
-gitnexus setup
-```
-
-For this machine, prefer a direct Codex MCP entry instead of `npx`:
-
-```toml
-[mcp_servers.gitnexus]
-command = "/home/huang/.local/bin/gitnexus"
-args = ["mcp"]
-```
-
-If `npx` throws cache errors such as `ENOTEMPTY`, do not keep retrying it. Use the local CLI path.
 
 To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
 

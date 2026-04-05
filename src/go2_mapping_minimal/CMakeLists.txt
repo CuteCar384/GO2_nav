@@ -12,8 +12,11 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(PCL REQUIRED COMPONENTS registration)
 
 add_executable(go2_map_builder src/go2_map_builder.cpp)
+target_include_directories(go2_map_builder PRIVATE ${PCL_INCLUDE_DIRS})
+target_link_libraries(go2_map_builder ${PCL_LIBRARIES})
 ament_target_dependencies(go2_map_builder
   rclcpp
   sensor_msgs

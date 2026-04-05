@@ -23,13 +23,13 @@ def generate_launch_description():
         'save_path', default_value='/home/huang/xxx/output/go2_built_map.pcd',
         description='PCD output file path.')
     voxel_leaf_size_arg = DeclareLaunchArgument(
-        'voxel_leaf_size', default_value='0.05',
+        'voxel_leaf_size', default_value='0.10',
         description='Voxel leaf size in meters. Use 0 or a negative value to disable voxel filtering.')
     publish_every_n_scans_arg = DeclareLaunchArgument(
         'publish_every_n_scans', default_value='5',
         description='Publish the accumulated map every N scans. Use 0 to disable periodic publishing.')
     downsample_every_n_scans_arg = DeclareLaunchArgument(
-        'downsample_every_n_scans', default_value='10',
+        'downsample_every_n_scans', default_value='3',
         description='Apply voxel downsampling every N scans. Use 0 to disable periodic downsampling.')
 
     named_pose_save_path_arg = DeclareLaunchArgument(

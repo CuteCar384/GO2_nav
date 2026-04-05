@@ -1,4 +1,5 @@
 #include <csignal>
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -15,6 +16,7 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/registration/icp.h>
 #include <pcl_conversions/pcl_conversions.h>
 
 namespace {
@@ -37,6 +39,13 @@ class Go2MapBuilder : public rclcpp::Node {
     voxel_leaf_size_ = declare_parameter<double>("voxel_leaf_size", 0.10);
     publish_every_n_scans_ = declare_parameter<int>("publish_every_n_scans", 5);
     downsample_every_n_scans_ = declare_parameter<int>("downsample_every_n_scans", 10);
+    enable_icp_z_correction_ = declare_parameter<bool>("enable_icp_z_correction", true);
+    odom_z_stale_epsilon_ = declare_parameter<double>("odom_z_stale_epsilon", 0.01);
+    odom_z_stale_distance_ = declare_parameter<double>("odom_z_stale_distance", 0.50);
+    icp_scan_voxel_leaf_size_ = declare_parameter<double>("icp_scan_voxel_leaf_size", 0.12);
+    icp_max_correspondence_distance_ = declare_parameter<double>("icp_max_correspondence_distance", 0.45);
+    icp_max_iterations_ = declare_parameter<int>("icp_max_iterations", 30);
+    icp_max_z_step_ = declare_parameter<double>("icp_max_z_step", 0.20);
     save_path_ = declare_parameter<std::string>("save_path", "/home/huang/xxx/output/go2_built_map.pcd");
 
     auto cloud_qos = rclcpp::SensorDataQoS();
@@ -57,6 +66,12 @@ class Go2MapBuilder : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "Listening cloud: %s", cloud_topic_.c_str());
     RCLCPP_INFO(get_logger(), "Listening odom: %s", odom_topic_.c_str());
     RCLCPP_INFO(get_logger(), "Saving map to: %s", save_path_.c_str());
+    RCLCPP_INFO(get_logger(),
+                "ICP z correction: %s (z_stale_eps=%.3f, z_stale_dist=%.2f, icp_voxel=%.2f)",
+                enable_icp_z_correction_ ? "enabled" : "disabled",
+                odom_z_stale_epsilon_,
+                odom_z_stale_distance_,
+                icp_scan_voxel_leaf_size_);
   }
 
   ~Go2MapBuilder() override {
@@ -96,6 +111,65 @@ class Go2MapBuilder : public rclcpp::Node {
     return filtered;
   }
 
+  pcl::PointCloud<PointType>::Ptr downsampleForIcp(
+      const pcl::PointCloud<PointType> &input_cloud) const {
+    auto downsampled = std::make_shared<pcl::PointCloud<PointType>>(input_cloud);
+    if (downsampled->empty() || icp_scan_voxel_leaf_size_ <= 0.0) {
+      return downsampled;
+    }
+    pcl::VoxelGrid<PointType> voxel;
+    voxel.setLeafSize(
+        static_cast<float>(icp_scan_voxel_leaf_size_),
+        static_cast<float>(icp_scan_voxel_leaf_size_),
+        static_cast<float>(icp_scan_voxel_leaf_size_));
+    voxel.setInputCloud(downsampled);
+    auto filtered = std::make_shared<pcl::PointCloud<PointType>>();
+    voxel.filter(*filtered);
+    return filtered;
+  }
+
+  bool estimateIcpZCorrection(
+      const pcl::PointCloud<PointType>::Ptr &target_cloud,
+      const pcl::PointCloud<PointType>::Ptr &source_cloud,
+      double *z_delta,
+      double *fitness) const {
+    if (!target_cloud || !source_cloud || !z_delta || target_cloud->size() < 40 || source_cloud->size() < 40) {
+      return false;
+    }
+
+    pcl::IterativeClosestPoint<PointType, PointType> icp;
+    icp.setInputTarget(target_cloud);
+    icp.setInputSource(source_cloud);
+    icp.setMaximumIterations(icp_max_iterations_);
+    icp.setMaxCorrespondenceDistance(icp_max_correspondence_distance_);
+    icp.setTransformationEpsilon(1e-6);
+    icp.setEuclideanFitnessEpsilon(1e-5);
+
+    pcl::PointCloud<PointType> aligned;
+    icp.align(aligned);
+    if (!icp.hasConverged()) {
+      return false;
+    }
+
+    const Eigen::Matrix4f transform = icp.getFinalTransformation();
+    double step = static_cast<double>(transform(2, 3));
+    if (!std::isfinite(step)) {
+      return false;
+    }
+
+    if (step > icp_max_z_step_) {
+      step = icp_max_z_step_;
+    } else if (step < -icp_max_z_step_) {
+      step = -icp_max_z_step_;
+    }
+
+    *z_delta = step;
+    if (fitness) {
+      *fitness = icp.getFitnessScore();
+    }
+    return true;
+  }
+
   void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
     pcl::PointCloud<PointType> cloud;
     pcl::fromROSMsg(*msg, cloud);
@@ -130,12 +204,42 @@ class Go2MapBuilder : public rclcpp::Node {
       cloud_in_map = cloud;
     } else {
       Eigen::Isometry3f odom_transform = Eigen::Isometry3f::Identity();
-      odom_transform.translation() =
-          latest_odom_position_.cast<float>();
+      Eigen::Vector3f odom_translation = latest_odom_position_.cast<float>();
+      odom_translation.z() += static_cast<float>(z_compensation_);
+      odom_transform.translation() = odom_translation;
       odom_transform.linear() =
           latest_odom_orientation_.toRotationMatrix().cast<float>();
       pcl::transformPointCloud(cloud, cloud_in_map, odom_transform.matrix());
     }
+
+    if (msg->header.frame_id == latest_odom_frame_id_ && std::abs(z_compensation_) > 1e-6) {
+      for (auto &pt : cloud_in_map.points) {
+        pt.z += static_cast<float>(z_compensation_);
+      }
+    }
+
+    if (enable_icp_z_correction_ && odom_z_stale_ && previous_scan_for_icp_) {
+      auto current_for_icp = downsampleForIcp(cloud_in_map);
+      double z_delta = 0.0;
+      double fitness = 0.0;
+      if (estimateIcpZCorrection(previous_scan_for_icp_, current_for_icp, &z_delta, &fitness)) {
+        if (std::abs(z_delta) > 1e-4) {
+          z_compensation_ += z_delta;
+          for (auto &pt : cloud_in_map.points) {
+            pt.z += static_cast<float>(z_delta);
+          }
+        }
+        if (scan_count_ % 20 == 0) {
+          RCLCPP_INFO(get_logger(),
+                      "ICP z correction applied: step=%.4f, total=%.4f, fitness=%.4f",
+                      z_delta,
+                      z_compensation_,
+                      fitness);
+        }
+      }
+    }
+
+    previous_scan_for_icp_ = downsampleForIcp(cloud_in_map);
 
     *map_cloud_ += cloud_in_map;
     ++scan_count_;
@@ -170,6 +274,30 @@ class Go2MapBuilder : public rclcpp::Node {
     latest_odom_frame_id_ = msg->header.frame_id.empty() ? "odom" : msg->header.frame_id;
     latest_odom_received_ = true;
 
+    if (has_previous_odom_) {
+      const Eigen::Vector3d delta = latest_odom_position_ - previous_odom_position_;
+      const double delta_xy = std::hypot(delta.x(), delta.y());
+      const double delta_z = std::abs(delta.z());
+      if (delta_xy > 1e-3 && delta_z < odom_z_stale_epsilon_) {
+        odom_z_flat_xy_distance_ += delta_xy;
+        if (odom_z_flat_xy_distance_ > odom_z_stale_distance_) {
+          odom_z_stale_ = true;
+          if (!warned_odom_z_stale_) {
+            warned_odom_z_stale_ = true;
+            RCLCPP_WARN(get_logger(),
+                        "Odometry z seems stale while moving in XY. Enabling ICP z compensation.");
+          }
+        }
+      } else {
+        odom_z_flat_xy_distance_ = 0.0;
+        odom_z_stale_ = false;
+        warned_odom_z_stale_ = false;
+        z_compensation_ = 0.0;
+      }
+    }
+    previous_odom_position_ = latest_odom_position_;
+    has_previous_odom_ = true;
+
     geometry_msgs::msg::PoseStamped pose;
     pose.header = msg->header;
     pose.pose = msg->pose.pose;
@@ -188,17 +316,31 @@ class Go2MapBuilder : public rclcpp::Node {
   double voxel_leaf_size_;
   int publish_every_n_scans_;
   int downsample_every_n_scans_;
+  bool enable_icp_z_correction_;
+  double odom_z_stale_epsilon_;
+  double odom_z_stale_distance_;
+  double icp_scan_voxel_leaf_size_;
+  double icp_max_correspondence_distance_;
+  int icp_max_iterations_;
+  double icp_max_z_step_;
   int scan_count_ = 0;
   bool saved_ = false;
   bool received_cloud_ = false;
   bool latest_odom_received_ = false;
   bool warned_missing_odom_ = false;
+  bool warned_odom_z_stale_ = false;
+  bool odom_z_stale_ = false;
+  bool has_previous_odom_ = false;
+  double odom_z_flat_xy_distance_ = 0.0;
+  double z_compensation_ = 0.0;
 
   Eigen::Vector3d latest_odom_position_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d previous_odom_position_ = Eigen::Vector3d::Zero();
   Eigen::Quaterniond latest_odom_orientation_ = Eigen::Quaterniond::Identity();
   std::string latest_odom_frame_id_ = "odom";
 
   pcl::PointCloud<PointType>::Ptr map_cloud_;
+  pcl::PointCloud<PointType>::Ptr previous_scan_for_icp_;
   nav_msgs::msg::Path path_msg_;
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
