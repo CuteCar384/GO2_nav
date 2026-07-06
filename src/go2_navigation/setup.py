@@ -16,6 +16,7 @@ setup(
             [
                 "launch/simple_goal_nav.launch.py",
                 "launch/click_goal_nav.launch.py",
+                "launch/height_map_viz.launch.py",
             ],
         ),
         ("share/" + package_name + "/config", ["config/go2_navigation.yaml"]),
@@ -42,6 +43,7 @@ setup(
             "named_goal_gui = go2_navigation.named_goal_gui:main",
             "navigation_mcp_server = go2_navigation.navigation_mcp_server:main",
             "gait_init_node = go2_navigation.gait_init_node:main",
+            "height_map_viz = go2_navigation.height_map_viz:main",
         ],
     },
 )
